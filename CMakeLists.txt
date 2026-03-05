@@ -11,33 +11,19 @@ elseif(MSVC)
     set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} /O2 /Oi /GL")
 endif()
 
-include(FetchContent)
+# Find GoogleTest
+find_package(GTest REQUIRED)
 
-# Fetch GoogleTest
-FetchContent_Declare(
-  googletest
-  URL https://github.com/google/googletest/archive/refs/tags/v1.14.0.zip
-)
-# For Windows: Prevent overriding of CMAKE_CXX_FLAGS /MD etc.
-set(gtest_force_shared_crt ON CACHE BOOL "" FORCE)
-FetchContent_MakeAvailable(googletest)
-
-# Fetch GoogleBenchmark
-FetchContent_Declare(
-  googlebenchmark
-  URL https://github.com/google/benchmark/archive/refs/tags/v1.8.3.zip
-)
-set(BENCHMARK_ENABLE_TESTING OFF CACHE BOOL "" FORCE)
-set(BENCHMARK_ENABLE_INSTALL OFF CACHE BOOL "" FORCE)
-FetchContent_MakeAvailable(googlebenchmark)
+# Find GoogleBenchmark
+find_package(benchmark REQUIRED)
 
 # Main Executable
 add_executable(hft_engine src/main.cpp)
 
 # Tests executable
 add_executable(hft_tests tests/test_ob.cpp src/OrderBook.cpp)
-target_link_libraries(hft_tests gtest_main)
+target_link_libraries(hft_tests GTest::gtest_main)
 
 # Benchmark executable
 add_executable(hft_bench tests/benchmark_ob.cpp src/OrderBook.cpp)
-target_link_libraries(hft_bench benchmark::benchmark_main)
+target_link_libraries(hft_bench benchmark::benchmark)
