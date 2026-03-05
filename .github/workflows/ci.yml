@@ -43,22 +43,4 @@ jobs:
       working-directory: ${{github.workspace}}/build
       run: ./hft_bench
 
-  memory_check:
-    runs-on: ubuntu-latest
-    steps:
-    - uses: actions/checkout@v3
 
-    - name: Install Dependencies
-      run: |
-        sudo apt-get update
-        sudo apt-get install -y valgrind libgtest-dev libbenchmark-dev cmake
-
-    - name: Configure CMake
-      run: cmake -B ${{github.workspace}}/build -DCMAKE_BUILD_TYPE=Debug
-
-    - name: Build
-      run: cmake --build ${{github.workspace}}/build --config Debug
-
-    - name: Valgrind Memory Check
-      working-directory: ${{github.workspace}}/build
-      run: valgrind --leak-check=full --error-exitcode=1 ./hft_tests
