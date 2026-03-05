@@ -9,6 +9,10 @@ using OrderId = uint64_t;
 using Price = uint64_t; // Fixed-point representation for speed (e.g., $1.50 = 15000)
 using Quantity = uint32_t;
 
+/**
+ * @enum Side
+ * @brief Represents the side of the trade (Buy or Sell).
+ */
 enum class Side : uint8_t {
     Buy,
     Sell
@@ -20,16 +24,22 @@ enum class OrderType : uint8_t {
     Cancel   // Cancels an existing order
 };
 
-// Represents a single order in the book.
-// We use intrusive pointers (next/prev) to avoid standard library allocations (like std::list)
-// and memory fragmentation.
+/**
+ * @struct Order
+ * @brief Represents a single order in the Limit Order Book.
+ *
+ * DESIGN DECISION: We explicitly avoid `std::list` due to its node-allocation
+ * overhead and poor cache locality. Instead, we use intrusive doubly-linked
+ * list pointers (`next` and `prev`). This keeps the Order struct entirely
+ * self-contained, allowing dense packing inside the `MemoryPool` and
+ * massively improving L1/L2 cache hit rates during order traversal.
+ */
 struct Order {
     OrderId id;
     Price price;
     Quantity quantity;
     Side side;
     
-    // Intrusive doubly-linked list pointers to keep Orders in a PriceLevel
     Order* next = nullptr;
     Order* prev = nullptr;
 

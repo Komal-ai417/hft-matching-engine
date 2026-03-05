@@ -1,3 +1,9 @@
+// MemoryPool.h
+// Provides a zero-dynamic-allocation memory pool for the HFT OrderBook.
+// By allocating a huge slab of memory up front on startup, we avoid
+// expensive operating system context switches caused by new/malloc/delete
+// during the critical matching paths.
+
 #pragma once
 
 #include <vector>
@@ -5,8 +11,16 @@
 
 namespace hft {
 
-// A simple vector-backed memory pool for Orders to achieve zero dynamic 
-// allocation during the critical matching path.
+/**
+ * @class MemoryPool
+ * @brief A vector-backed memory pool designed for zero-allocation runtime.
+ * 
+ * Works by pre-allocating a maximum capacity of objects (`T`). In an HFT environment,
+ * you would set this capacity high enough (e.g., millions) so it never exhausts
+ * during a single trading day. It maintains a stack (LIFO) of available indices
+ * to hand out pointers on `allocate()` and reclaim them on `deallocate()`.
+ * Allocation operations are O(1).
+ */
 template <typename T>
 class MemoryPool {
 public:
