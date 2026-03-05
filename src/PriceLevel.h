@@ -14,10 +14,10 @@ struct PriceLevel {
     Order* head = nullptr;
     Order* tail = nullptr;
 
-    explicit PriceLevel(Price price) : price(price) {}
+    explicit PriceLevel(Price price) noexcept : price(price) {}
 
     // Append an order to the end of the queue (Time priority)
-    void append_order(Order* order) {
+    inline void append_order(Order* order) noexcept {
         if (!head) {
             head = tail = order;
             order->prev = nullptr;
@@ -32,7 +32,7 @@ struct PriceLevel {
     }
 
     // Remove an order from this price level (e.g., cancellation or full fill)
-    void remove_order(Order* order) {
+    inline void remove_order(Order* order) noexcept {
         if (order->prev) {
             order->prev->next = order->next;
         } else {

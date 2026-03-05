@@ -54,8 +54,8 @@ graph TD
 
 ## Performance Metrics
 
-- **Average Match Latency:** `~229 nanoseconds` (0.229 microseconds)
-- **Total Throughput:** `~4.3+ million operations per second` 
+- **Average Match Latency:** `~126 nanoseconds` (0.126 microseconds)
+- **Total Throughput:** `~7.8+ million operations per second` 
 *(Measured on a standard consumer CPU utilizing GCC 6.3 Windows natively)*
 
 ## Core Design Principles

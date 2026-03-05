@@ -3,10 +3,12 @@
 
 namespace hft {
 
-std::vector<Trade> OrderBook::add_order(OrderId id, OrderType type, Price price, Quantity quantity, Side side) {
+const std::vector<Trade>& OrderBook::add_order(OrderId id, OrderType type, Price price, Quantity quantity, Side side) {
+    trades_.clear(); // O(1) clear without freeing memory capacity
+
     if (type == OrderType::Cancel) {
         cancel_order(id);
-        return {};
+        return trades_;
     }
 
     // Allocate order from pool
@@ -16,7 +18,7 @@ std::vector<Trade> OrderBook::add_order(OrderId id, OrderType type, Price price,
     order->quantity = quantity;
     order->side = side;
 
-    std::vector<Trade> trades = match_order(order);
+    match_order(order);
 
     if (order->quantity > 0) {
         if (type == OrderType::Market) {
@@ -26,14 +28,11 @@ std::vector<Trade> OrderBook::add_order(OrderId id, OrderType type, Price price,
             // Rest in the book
             order_map_[id] = order;
             if (side == Side::Buy) {
-                // Get or insert PriceLevel
                 auto result = bids_.emplace(order->price, order->price);
-                auto it = result.first;
-                it->second.append_order(order);
+                result.first->second.append_order(order);
             } else {
                 auto result = asks_.emplace(order->price, order->price);
-                auto it = result.first;
-                it->second.append_order(order);
+                result.first->second.append_order(order);
             }
         }
     } else {
@@ -41,11 +40,10 @@ std::vector<Trade> OrderBook::add_order(OrderId id, OrderType type, Price price,
         order_pool_.deallocate(order);
     }
 
-    return trades;
+    return trades_;
 }
 
-std::vector<Trade> OrderBook::match_order(Order* taker_order) {
-    std::vector<Trade> trades;
+void OrderBook::match_order(Order* taker_order) {
     
     if (taker_order->side == Side::Buy) {
         // Cross against Asks (lowest to highest)
@@ -60,7 +58,7 @@ std::vector<Trade> OrderBook::match_order(Order* taker_order) {
                 Quantity trade_qty = std::min(taker_order->quantity, maker_order->quantity);
                 Price trade_price = maker_order->price; // Price improvement (Maker's price)
                 
-                trades.push_back({maker_order->id, taker_order->id, trade_price, trade_qty});
+                trades_.push_back({maker_order->id, taker_order->id, trade_price, trade_qty});
                 
                 taker_order->quantity -= trade_qty;
                 maker_order->quantity -= trade_qty;
@@ -97,7 +95,7 @@ std::vector<Trade> OrderBook::match_order(Order* taker_order) {
                 Quantity trade_qty = std::min(taker_order->quantity, maker_order->quantity);
                 Price trade_price = maker_order->price;
                 
-                trades.push_back({maker_order->id, taker_order->id, trade_price, trade_qty});
+                trades_.push_back({maker_order->id, taker_order->id, trade_price, trade_qty});
                 
                 taker_order->quantity -= trade_qty;
                 maker_order->quantity -= trade_qty;
@@ -121,8 +119,6 @@ std::vector<Trade> OrderBook::match_order(Order* taker_order) {
             }
         }
     }
-    
-    return trades;
 }
 
 bool OrderBook::cancel_order(OrderId id) {

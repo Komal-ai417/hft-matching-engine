@@ -34,13 +34,14 @@ public:
      */
     explicit OrderBook(size_t max_orders) : order_pool_(max_orders) {
         order_map_.reserve(max_orders);
+        trades_.reserve(8192); // Pre-allocate internal trade log buffer
     }
 
     /**
      * @brief Process an incoming order. Converts to market order if price logic applies.
-     * @return A vector of Trade structures representing executed matches.
+     * @return A const reference to the internally generated trades. Zero heap allocations.
      */
-    std::vector<Trade> add_order(OrderId id, OrderType type, Price price, Quantity quantity, Side side);
+    const std::vector<Trade>& add_order(OrderId id, OrderType type, Price price, Quantity quantity, Side side);
 
     /**
      * @brief Cancels an existing order from the book via its ID in O(1) time.
@@ -49,8 +50,11 @@ public:
     bool cancel_order(OrderId id);
 
 private:
-    std::vector<Trade> match_order(Order* taker_order);
+    void match_order(Order* taker_order);
     
+    // Internal pre-allocated trade buffer
+    std::vector<Trade> trades_;
+
     // Bid book (highest price first)
     std::map<Price, PriceLevel, std::greater<Price>> bids_;
     

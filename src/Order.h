@@ -33,19 +33,23 @@ enum class OrderType : uint8_t {
  * list pointers (`next` and `prev`). This keeps the Order struct entirely
  * self-contained, allowing dense packing inside the `MemoryPool` and
  * massively improving L1/L2 cache hit rates during order traversal.
+ * 
+ * We align to 32 bytes to ensure an `Order` never strides two 64-byte 
+ * CPU cache lines, preventing cache tearing.
  */
-struct Order {
-    OrderId id;
-    Price price;
-    Quantity quantity;
-    Side side;
+struct alignas(32) Order {
+    OrderId id;           // 8 bytes
+    Price price;          // 8 bytes
+    Quantity quantity;    // 4 bytes
+    Side side;            // 1 byte
+    // 3 bytes padding
     
-    Order* next = nullptr;
-    Order* prev = nullptr;
+    Order* next = nullptr;// 8 bytes
+    Order* prev = nullptr;// 8 bytes
 
-    Order() : id(0), price(0), quantity(0), side(Side::Buy) {}
+    Order() noexcept : id(0), price(0), quantity(0), side(Side::Buy) {}
     
-    Order(OrderId id, Price price, Quantity quantity, Side side)
+    Order(OrderId id, Price price, Quantity quantity, Side side) noexcept
         : id(id), price(price), quantity(quantity), side(side) {}
 };
 
