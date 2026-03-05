@@ -19,8 +19,10 @@ jobs:
     steps:
     - uses: actions/checkout@v3
 
-    - name: Ensure Compiler
+    - name: Install Dependencies
       run: |
+        sudo apt-get update
+        sudo apt-get install -y libgtest-dev libbenchmark-dev cmake
         if [ "${{ matrix.compiler }}" = "gcc" ]; then
           sudo apt-get install -y g++
         else
@@ -46,8 +48,10 @@ jobs:
     steps:
     - uses: actions/checkout@v3
 
-    - name: Install Valgrind
-      run: sudo apt-get install -y valgrind
+    - name: Install Dependencies
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y valgrind libgtest-dev libbenchmark-dev cmake
 
     - name: Configure CMake
       run: cmake -B ${{github.workspace}}/build -DCMAKE_BUILD_TYPE=Debug
