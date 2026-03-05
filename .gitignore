@@ -1,0 +1,29 @@
+# CMake build directories
+build/
+out/
+.cmake/
+CMakeCache.txt
+CMakeFiles/
+
+# Executables
+*.exe
+*.out
+*.app
+
+# VS Code
+.vscode/
+
+# VS/MSVC
+.vs/
+*.sln
+*.vcxproj
+*.vcxproj.user
+*.vcxproj.filters
+
+# Object files and libraries
+*.o
+*.obj
+*.so
+*.dll
+*.lib
+*.a
