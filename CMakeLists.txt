@@ -35,9 +35,9 @@ FetchContent_MakeAvailable(googlebenchmark)
 add_executable(hft_engine src/main.cpp)
 
 # Tests executable
-add_executable(hft_tests tests/test_ob.cpp)
+add_executable(hft_tests tests/test_ob.cpp src/OrderBook.cpp)
 target_link_libraries(hft_tests gtest_main)
 
 # Benchmark executable
-add_executable(hft_bench tests/benchmark_ob.cpp)
+add_executable(hft_bench tests/benchmark_ob.cpp src/OrderBook.cpp)
 target_link_libraries(hft_bench benchmark::benchmark_main)
