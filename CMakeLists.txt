@@ -18,7 +18,7 @@ find_package(GTest REQUIRED)
 find_package(benchmark REQUIRED)
 
 # Main Executable
-add_executable(hft_engine src/main.cpp)
+add_executable(hft_engine src/main.cpp src/OrderBook.cpp)
 
 # Tests executable
 add_executable(hft_tests tests/test_ob.cpp src/OrderBook.cpp)
