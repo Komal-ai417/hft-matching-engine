@@ -72,7 +72,7 @@ TEST(OrderBookTest, Cancellations) {
     OrderBook ob(100);
     ob.add_order(1, OrderType::Limit, 100, 10, Side::Sell);
     
-    auto trades = ob.add_order(2, OrderType::Cancel, 0, 0, Side::Buy); // Side doesn't matter
+    auto trades = ob.add_order(1, OrderType::Cancel, 0, 0, Side::Buy); // Side doesn't matter
     EXPECT_EQ(trades.size(), 0);
     
     // Try to match, should fail because order 1 was canceled
