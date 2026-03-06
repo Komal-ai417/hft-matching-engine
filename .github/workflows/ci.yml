@@ -37,10 +37,8 @@ jobs:
 
     - name: Test (Google Test)
       working-directory: ${{github.workspace}}/build
-      run: ctest -C ${{env.BUILD_TYPE}} --output-on-failure
+      run: ./hft_tests
 
     - name: Benchmark (Google Benchmark)
       working-directory: ${{github.workspace}}/build
       run: ./hft_bench
-
-
