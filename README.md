@@ -113,3 +113,4 @@ Engine run complete. Built for microsecond latency.
 This project represents the core "matching loop" used by actual financial exchanges (like NASDAQ or Binance) to process raw FIX or ITCH protocol feeds. The next steps for scaling this into full production would be:
 1. Adding SPSC (Single-Producer Single-Consumer) Lock-Free Queues to receive network packets from a separate I/O network thread.
 2. Replacing `std::map` with an Array-Backed Flat Map utilizing `std::vector` for incredibly dense price increments (tick sizes) to eliminate pointer chasing across tree nodes.
+
