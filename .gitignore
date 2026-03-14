@@ -1,37 +1,29 @@
-# Build directories
+# CMake build directories
 build/
-bin/
 out/
 .cmake/
-
-# CMake configuration files
 CMakeCache.txt
 CMakeFiles/
-Makefile
-cmake_install.cmake
-install_manifest.txt
-compile_commands.json
 
-# IDEs
-.idea/
+# Executables
+*.exe
+*.out
+*.app
+
+# VS Code
 .vscode/
-*.swp
-*.suo
-*.user
+
+# VS/MSVC
+.vs/
 *.sln
 *.vcxproj
-*.filters
+*.vcxproj.user
+*.vcxproj.filters
 
-# Generated binaries and libraries
-*.exe
-*.dll
+# Object files and libraries
+*.o
+*.obj
 *.so
-*.dylib
-*.out
-*.a
+*.dll
 *.lib
-
-# Test data artifacts — these should never be committed
-*.huf
-*.bin
-*.log
+*.a
