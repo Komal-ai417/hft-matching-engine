@@ -62,6 +62,7 @@ graph TD
 
 To achieve sub-microsecond latency, this engine adheres to the following strict C++ design principles:
 
+
 ### 1. Zero Dynamic Allocation on the Critical Path
 In C++, `new` and `malloc` require expensive context switches to the Operating System. During active trading hours, we cannot afford this unpredictability. 
 - **Solution:** A custom `MemoryPool<Order>` pre-allocates a massive contiguous block of memory on startup `(e.g., 1,000,000 orders)`. The matching engine simply hands out pointers to pre-allocated memory using a stack-based LIFO free-list. Allocation and deallocation are strictly $O(1)$ and never hit the OS.
