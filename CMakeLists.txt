@@ -7,9 +7,10 @@ set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
 # ── Build-type-aware flags ──────────────────────────────────
 if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
-    # Release: full optimization with native tuning
-    set(CMAKE_CXX_FLAGS_RELEASE "${CMAKE_CXX_FLAGS_RELEASE} -O3 -march=native -flto")
-    # Debug: sanitizers + debug symbols (no -march=native for portability)
+    add_compile_options(-Wall -Wextra -Wpedantic)
+    # Release: full optimization (+ IPO if supported)
+    set(CMAKE_CXX_FLAGS_RELEASE "${CMAKE_CXX_FLAGS_RELEASE} -O3")
+    # Debug: sanitizers + debug symbols
     set(CMAKE_CXX_FLAGS_DEBUG "${CMAKE_CXX_FLAGS_DEBUG} -O0 -g -fsanitize=address,undefined -fno-omit-frame-pointer")
     set(CMAKE_EXE_LINKER_FLAGS_DEBUG "${CMAKE_EXE_LINKER_FLAGS_DEBUG} -fsanitize=address,undefined")
 elseif(MSVC)
@@ -38,6 +39,16 @@ set(gtest_force_shared_crt ON CACHE BOOL "" FORCE)
 set(BENCHMARK_ENABLE_TESTING OFF CACHE BOOL "" FORCE)
 
 FetchContent_MakeAvailable(googletest googlebenchmark)
+
+# ── Interprocedural Optimization (LTO) ──────────────────────
+include(CheckIPOSupported)
+check_ipo_supported(RESULT ipo_supported OUTPUT ipo_error)
+if(ipo_supported)
+    message(STATUS "IPO/LTO is supported and enabled.")
+    set_property(DIRECTORY PROPERTY INTERPROCEDURAL_OPTIMIZATION TRUE)
+else()
+    message(STATUS "IPO/LTO is not supported: ${ipo_error}")
+endif()
 
 # ── Main Executable ────────────────────────────────────────
 add_executable(hft_engine src/main.cpp src/OrderBook.cpp)
