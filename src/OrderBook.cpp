@@ -3,20 +3,37 @@
 
 namespace hft {
 
-const std::vector<Trade>& OrderBook::add_order(OrderId id, OrderType type, Price price, Quantity quantity, Side side) {
+OrderResult OrderBook::add_order(OrderId id, OrderType type, Price price, Quantity quantity, Side side) {
     trades_.clear(); // O(1) clear without freeing memory capacity
 
+    // --- Handle Cancel orders ---
     if (type == OrderType::Cancel) {
-        cancel_order(id);
-        return trades_;
+        bool ok = cancel_order(id);
+        return {std::move(trades_), ok, ok};
+    }
+
+    // --- Input validation (Issue #6) ---
+    if (quantity == 0) {
+        return {std::move(trades_), false, false}; // Reject zero-quantity orders
+    }
+
+    // --- Duplicate order ID check (Issue #1) ---
+    // Without this, the old Order* is silently overwritten in order_map_,
+    // leaking the pool slot and leaving dangling pointers in the PriceLevel.
+    if (order_map_.find(id) != order_map_.end()) {
+        return {std::move(trades_), false, false}; // Reject duplicate ID
     }
 
     // Allocate order from pool
     Order* order = order_pool_.allocate();
     order->id = id;
-    order->price = type == OrderType::Market ? (side == Side::Buy ? static_cast<Price>(-1) : 0) : price;
+    order->price = type == OrderType::Market
+                       ? (side == Side::Buy ? MARKET_BUY_PRICE : MARKET_SELL_PRICE)
+                       : price;
     order->quantity = quantity;
     order->side = side;
+    order->next = nullptr;
+    order->prev = nullptr;
 
     match_order(order);
 
@@ -40,7 +57,7 @@ const std::vector<Trade>& OrderBook::add_order(OrderId id, OrderType type, Price
         order_pool_.deallocate(order);
     }
 
-    return trades_;
+    return {std::move(trades_), true, false};
 }
 
 void OrderBook::match_order(Order* taker_order) {

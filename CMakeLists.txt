@@ -1,29 +1,51 @@
 cmake_minimum_required(VERSION 3.14)
 project(HFT_MatchingEngine CXX)
 
-set(CMAKE_CXX_STANDARD 20)
+set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
+set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
-# HFT Optimization flags
+# ── Build-type-aware flags ──────────────────────────────────
 if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
-    set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -O3 -march=native -flto")
+    # Release: full optimization with native tuning
+    set(CMAKE_CXX_FLAGS_RELEASE "${CMAKE_CXX_FLAGS_RELEASE} -O3 -march=native -flto")
+    # Debug: sanitizers + debug symbols (no -march=native for portability)
+    set(CMAKE_CXX_FLAGS_DEBUG "${CMAKE_CXX_FLAGS_DEBUG} -O0 -g -fsanitize=address,undefined -fno-omit-frame-pointer")
+    set(CMAKE_EXE_LINKER_FLAGS_DEBUG "${CMAKE_EXE_LINKER_FLAGS_DEBUG} -fsanitize=address,undefined")
 elseif(MSVC)
-    set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} /O2 /Oi /GL")
+    set(CMAKE_CXX_FLAGS_RELEASE "${CMAKE_CXX_FLAGS_RELEASE} /O2 /Oi /GL")
+    set(CMAKE_CXX_FLAGS_DEBUG "${CMAKE_CXX_FLAGS_DEBUG} /Od /Zi /fsanitize=address")
 endif()
 
-# Find GoogleTest
-find_package(GTest REQUIRED)
+# ── Auto-download dependencies via FetchContent ────────────
+include(FetchContent)
 
-# Find GoogleBenchmark
-find_package(benchmark REQUIRED)
+FetchContent_Declare(
+    googletest
+    GIT_REPOSITORY https://github.com/google/googletest.git
+    GIT_TAG        v1.14.0
+)
 
-# Main Executable
+FetchContent_Declare(
+    googlebenchmark
+    GIT_REPOSITORY https://github.com/google/benchmark.git
+    GIT_TAG        v1.8.3
+)
+
+# Prevent GoogleTest from overriding compiler/linker settings on Windows
+set(gtest_force_shared_crt ON CACHE BOOL "" FORCE)
+# Disable benchmark tests to speed up build
+set(BENCHMARK_ENABLE_TESTING OFF CACHE BOOL "" FORCE)
+
+FetchContent_MakeAvailable(googletest googlebenchmark)
+
+# ── Main Executable ────────────────────────────────────────
 add_executable(hft_engine src/main.cpp src/OrderBook.cpp)
 
-# Tests executable
+# ── Tests executable ───────────────────────────────────────
 add_executable(hft_tests tests/test_ob.cpp src/OrderBook.cpp)
 target_link_libraries(hft_tests GTest::gtest_main)
 
-# Benchmark executable
+# ── Benchmark executable ──────────────────────────────────
 add_executable(hft_bench tests/benchmark_ob.cpp src/OrderBook.cpp)
 target_link_libraries(hft_bench benchmark::benchmark)

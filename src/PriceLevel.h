@@ -9,6 +9,7 @@ namespace hft {
 struct PriceLevel {
     Price price;
     Quantity total_quantity = 0;
+    uint32_t order_count = 0;  // Track order count for faster empty-level detection
     
     // Head and tail of the intrusive linked list
     Order* head = nullptr;
@@ -29,6 +30,7 @@ struct PriceLevel {
             tail = order;
         }
         total_quantity += order->quantity;
+        ++order_count;
     }
 
     // Remove an order from this price level (e.g., cancellation or full fill)
@@ -48,6 +50,7 @@ struct PriceLevel {
         order->prev = nullptr;
         order->next = nullptr;
         total_quantity -= order->quantity;
+        --order_count;
     }
 
     bool is_empty() const noexcept {

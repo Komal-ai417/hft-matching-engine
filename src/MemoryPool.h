@@ -8,6 +8,7 @@
 
 #include <vector>
 #include <stdexcept>
+#include <cstring>
 
 namespace hft {
 
@@ -20,6 +21,10 @@ namespace hft {
  * during a single trading day. It maintains a stack (LIFO) of available indices
  * to hand out pointers on `allocate()` and reclaim them on `deallocate()`.
  * Allocation operations are O(1).
+ *
+ * SAFETY: An allocation bitmap (`allocated_`) guards against double-free bugs,
+ * which would otherwise cause two callers to receive the same memory address —
+ * an extremely hard-to-debug corruption scenario.
  */
 template <typename T>
 class MemoryPool {
@@ -27,6 +32,7 @@ public:
     explicit MemoryPool(size_t max_capacity) : capacity_(max_capacity) {
         pool_.resize(max_capacity);
         free_indices_.reserve(max_capacity);
+        allocated_.resize(max_capacity, false);
         
         // Initialize free list with all available indices in reverse order
         for (size_t i = max_capacity; i > 0; --i) {
@@ -35,24 +41,38 @@ public:
     }
 
     // Allocate an object from the pool.
-    // Returns a pointer to the uninitialized memory (actually initialized by vector default,
-    // but placement new can be used if needed. Here we just return the pointer).
+    // Returns a pointer to pool memory. In debug builds, the memory is zeroed
+    // to catch stale-data bugs early.
     T* allocate() {
         if (free_indices_.empty()) {
             throw std::bad_alloc(); // Pool is exhausted
         }
         size_t index = free_indices_.back();
         free_indices_.pop_back();
+        allocated_[index] = true;
+
+#ifndef NDEBUG
+        // Zero memory in debug builds to catch stale-data bugs.
+        // Skipped in release for performance (~2-5 ns overhead per alloc).
+        std::memset(&pool_[index], 0, sizeof(T));
+#endif
+
         return &pool_[index];
     }
 
     // Return an object to the pool.
+    // Guards against double-free: if the slot is not currently allocated,
+    // this is a logic error that would corrupt the free list.
     void deallocate(T* ptr) {
         // Calculate index based on pointer arithmetic
-        size_t index = ptr - pool_.data();
+        size_t index = static_cast<size_t>(ptr - pool_.data());
         if (index >= capacity_) {
             throw std::out_of_range("Pointer does not belong to this memory pool.");
         }
+        if (!allocated_[index]) {
+            throw std::logic_error("Double free detected in MemoryPool!");
+        }
+        allocated_[index] = false;
         free_indices_.push_back(index);
     }
 
@@ -64,10 +84,17 @@ public:
         return capacity_;
     }
 
+    /// Returns true if the given pointer is currently allocated from this pool.
+    bool is_allocated(const T* ptr) const noexcept {
+        size_t index = static_cast<size_t>(ptr - pool_.data());
+        return index < capacity_ && allocated_[index];
+    }
+
 private:
     size_t capacity_;
     std::vector<T> pool_;
-    std::vector<size_t> free_indices_; // Stack of available indices
+    std::vector<size_t> free_indices_;   // Stack of available indices
+    std::vector<bool> allocated_;        // Tracks which slots are in use
 };
 
 } // namespace hft

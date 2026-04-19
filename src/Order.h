@@ -2,12 +2,17 @@
 
 #include <cstdint>
 #include <iostream>
+#include <limits>
 
 namespace hft {
 
 using OrderId = uint64_t;
 using Price = uint64_t; // Fixed-point representation for speed (e.g., $1.50 = 15000)
 using Quantity = uint32_t;
+
+/// Named constants for market order pricing — avoids fragile unsigned underflow hacks.
+constexpr Price MARKET_BUY_PRICE  = std::numeric_limits<Price>::max();
+constexpr Price MARKET_SELL_PRICE = 0;
 
 /**
  * @enum Side
@@ -34,10 +39,10 @@ enum class OrderType : uint8_t {
  * self-contained, allowing dense packing inside the `MemoryPool` and
  * massively improving L1/L2 cache hit rates during order traversal.
  * 
- * We align to 32 bytes to ensure an `Order` never strides two 64-byte 
- * CPU cache lines, preventing cache tearing.
+ * We align to 64 bytes to ensure an `Order` never strides two 64-byte 
+ * CPU cache lines, preventing cache tearing on modern x86/ARM processors.
  */
-struct alignas(32) Order {
+struct alignas(64) Order {
     OrderId id;           // 8 bytes
     Price price;          // 8 bytes
     Quantity quantity;    // 4 bytes

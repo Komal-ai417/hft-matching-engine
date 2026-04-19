@@ -17,6 +17,23 @@ struct Trade {
 };
 
 /**
+ * @struct OrderResult
+ * @brief Structured result from add_order() — replaces the old raw vector return.
+ *
+ * Allows callers to distinguish between:
+ *   - Order accepted and matched (accepted=true, trades non-empty)
+ *   - Order accepted and resting (accepted=true, trades empty)
+ *   - Order rejected (accepted=false) — duplicate ID, zero quantity, etc.
+ *   - Cancel succeeded (cancelled=true)
+ *   - Cancel failed / order not found (cancelled=false, accepted=false)
+ */
+struct OrderResult {
+    std::vector<Trade> trades;
+    bool accepted  = false;
+    bool cancelled = false;
+};
+
+/**
  * @class OrderBook
  * @brief The core matching engine utilizing Price-Time priority.
  * 
@@ -34,14 +51,18 @@ public:
      */
     explicit OrderBook(size_t max_orders) : order_pool_(max_orders) {
         order_map_.reserve(max_orders);
-        trades_.reserve(8192); // Pre-allocate internal trade log buffer
+        trades_.reserve(16384); // Pre-allocate internal trade log buffer (doubled from 8192)
     }
 
     /**
-     * @brief Process an incoming order. Converts to market order if price logic applies.
-     * @return A const reference to the internally generated trades. Zero heap allocations.
+     * @brief Process an incoming order (Limit, Market, or Cancel).
+     * @return An OrderResult containing trades and acceptance/cancellation status.
+     *
+     * Rejection reasons (accepted=false):
+     *   - Duplicate OrderId already exists in the book
+     *   - Zero quantity on a non-Cancel order
      */
-    const std::vector<Trade>& add_order(OrderId id, OrderType type, Price price, Quantity quantity, Side side);
+    OrderResult add_order(OrderId id, OrderType type, Price price, Quantity quantity, Side side);
 
     /**
      * @brief Cancels an existing order from the book via its ID in O(1) time.
