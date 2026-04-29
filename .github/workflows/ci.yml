@@ -1,45 +1,45 @@
-# name: C++ CI
+name: C++ CI
 
-# on:
-#   push:
-#     branches: [ "main" ]
-#   pull_request:
-#     branches: [ "main" ]
+on:
+  push:
+    branches: [ "main" ]
+  pull_request:
+    branches: [ "main" ]
 
-# jobs:
-#   build_and_test:
-#     runs-on: ubuntu-latest
-#     strategy:
-#       matrix:
-#         compiler: [gcc, clang]
-#         build_type: [Release, Debug]
+jobs:
+  build_and_test:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        compiler: [gcc, clang]
+        build_type: [Release, Debug]
 
-#     steps:
-#     - uses: actions/checkout@v4
+    steps:
+    - uses: actions/checkout@v4
 
-#     - name: Install Compiler
-#       run: |
-#         sudo apt-get update
-#         if [ "${{ matrix.compiler }}" = "gcc" ]; then
-#           sudo apt-get install -y g++
-#         else
-#           sudo apt-get install -y clang
-#         fi
+    - name: Install Compiler
+      run: |
+        sudo apt-get update
+        if [ "${{ matrix.compiler }}" = "gcc" ]; then
+          sudo apt-get install -y g++-14
+        else
+          sudo apt-get install -y clang-18
+        fi
 
-#     - name: Configure CMake
-#       run: >
-#         cmake -B ${{github.workspace}}/build
-#         -DCMAKE_BUILD_TYPE=${{ matrix.build_type }}
-#         -DCMAKE_CXX_COMPILER=${{ matrix.compiler == 'gcc' && 'g++' || 'clang++' }}
+    - name: Configure CMake
+      run: >
+        cmake -B ${{github.workspace}}/build
+        -DCMAKE_BUILD_TYPE=${{ matrix.build_type }}
+        -DCMAKE_CXX_COMPILER=${{ matrix.compiler == 'gcc' && 'g++-14' || 'clang++-18' }}
 
-#     - name: Build
-#       run: cmake --build ${{github.workspace}}/build --config ${{ matrix.build_type }} -j$(nproc)
+    - name: Build
+      run: cmake --build ${{github.workspace}}/build --config ${{ matrix.build_type }} -j$(nproc)
 
-#     - name: Test (Google Test)
-#       working-directory: ${{github.workspace}}/build
-#       run: ./hft_tests
+    - name: Test (Google Test)
+      working-directory: ${{github.workspace}}/build
+      run: ./hft_tests
 
-#     - name: Benchmark (Release only)
-#       if: matrix.build_type == 'Release'
-#       working-directory: ${{github.workspace}}/build
-#       run: ./hft_bench --benchmark_min_time=0.1s
+    - name: Benchmark (Release only)
+      if: matrix.build_type == 'Release'
+      working-directory: ${{github.workspace}}/build
+      run: ./hft_bench --benchmark_min_time=0.1s
