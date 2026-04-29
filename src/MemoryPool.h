@@ -29,14 +29,19 @@ namespace hft {
 template <typename T>
 class MemoryPool {
 public:
-    explicit MemoryPool(size_t max_capacity) : capacity_(max_capacity) {
+    explicit MemoryPool(size_t max_capacity) : capacity_(max_capacity), available_count_(max_capacity) {
         pool_.resize(max_capacity);
-        free_indices_.reserve(max_capacity);
         allocated_.resize(max_capacity, false);
         
-        // Initialize free list with all available indices in reverse order
-        for (size_t i = max_capacity; i > 0; --i) {
-            free_indices_.push_back(i - 1);
+        // Link all blocks together via their internal 'next' pointers
+        for (size_t i = 0; i < max_capacity - 1; ++i) {
+            pool_[i].next = &pool_[i + 1];
+        }
+        if (max_capacity > 0) {
+            pool_[max_capacity - 1].next = nullptr;
+            next_free_ = &pool_[0];
+        } else {
+            next_free_ = nullptr;
         }
     }
 
@@ -44,20 +49,23 @@ public:
     // Returns a pointer to pool memory. In debug builds, the memory is zeroed
     // to catch stale-data bugs early.
     T* allocate() {
-        if (free_indices_.empty()) {
+        if (!next_free_) {
             throw std::bad_alloc(); // Pool is exhausted
         }
-        size_t index = free_indices_.back();
-        free_indices_.pop_back();
+        T* obj = next_free_;
+        next_free_ = obj->next; // Advance free list
+        
+        size_t index = static_cast<size_t>(obj - pool_.data());
         allocated_[index] = true;
+        --available_count_;
 
 #ifndef NDEBUG
         // Zero memory in debug builds to catch stale-data bugs.
         // Skipped in release for performance (~2-5 ns overhead per alloc).
-        std::memset(&pool_[index], 0, sizeof(T));
+        std::memset(obj, 0, sizeof(T));
 #endif
 
-        return &pool_[index];
+        return obj;
     }
 
     // Return an object to the pool.
@@ -73,11 +81,14 @@ public:
             throw std::logic_error("Double free detected in MemoryPool!");
         }
         allocated_[index] = false;
-        free_indices_.push_back(index);
+        
+        ptr->next = next_free_;
+        next_free_ = ptr;
+        ++available_count_;
     }
 
     size_t available() const noexcept {
-        return free_indices_.size();
+        return available_count_;
     }
     
     size_t capacity() const noexcept {
@@ -93,7 +104,8 @@ public:
 private:
     size_t capacity_;
     std::vector<T> pool_;
-    std::vector<size_t> free_indices_;   // Stack of available indices
+    T* next_free_ = nullptr;
+    size_t available_count_ = 0;
     std::vector<bool> allocated_;        // Tracks which slots are in use
 };
 
