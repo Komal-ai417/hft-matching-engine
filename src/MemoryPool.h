@@ -60,9 +60,9 @@ public:
         --available_count_;
 
 #ifndef NDEBUG
-        // Zero memory in debug builds to catch stale-data bugs.
-        // Skipped in release for performance (~2-5 ns overhead per alloc).
-        std::memset(obj, 0, sizeof(T));
+        // Value-initialize to zero in debug builds to catch stale-data bugs.
+        // Using placement-new with value initialization instead of memset to avoid -Wclass-memaccess
+        new (obj) T(); 
 #endif
 
         return obj;
