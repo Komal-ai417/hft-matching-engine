@@ -3,11 +3,20 @@
 #include "Order.h"
 #include "PriceLevel.h"
 #include "MemoryPool.h"
-#include <map>
-#include <unordered_map>
 #include <vector>
+#include <expected>
+#include <bit>
+#include <algorithm>
 
 namespace hft {
+
+enum class RejectReason : uint8_t {
+    InvalidQuantity,
+    DuplicateOrderId,
+    OutOfBoundsOrderId,
+    OutOfBoundsPrice,
+    CancelFailed
+};
 
 struct Trade {
     OrderId maker_id;
@@ -16,77 +25,234 @@ struct Trade {
     Quantity quantity;
 };
 
-/**
- * @struct OrderResult
- * @brief Structured result from add_order() — replaces the old raw vector return.
- *
- * Allows callers to distinguish between:
- *   - Order accepted and matched (accepted=true, trades non-empty)
- *   - Order accepted and resting (accepted=true, trades empty)
- *   - Order rejected (accepted=false) — duplicate ID, zero quantity, etc.
- *   - Cancel succeeded (cancelled=true)
- *   - Cancel failed / order not found (cancelled=false, accepted=false)
- */
-struct OrderResult {
-    std::vector<Trade> trades;
-    bool accepted  = false;
-    bool cancelled = false;
-};
+#if !defined(NDEBUG) || !defined(__OPTIMIZE__)
+    #include <cassert>
+    #define HFT_ASSUME(cond) assert(cond)
+#else
+    #define HFT_ASSUME(cond) [[assume(cond)]]
+#endif
 
-/**
- * @class OrderBook
- * @brief The core matching engine utilizing Price-Time priority.
- * 
- * DESIGN DECISION:
- * 1. Bids/Asks are stored in `std::map`. While an Array-backed flat map could
- *    be faster for dense prices, `std::map` handles sparse prices gracefully.
- * 2. Instant cancellations are achieved using an `std::unordered_map` that
- *    points directly to the `Order*` in memory, allowing O(1) removals.
- */
 class OrderBook {
 public:
-    /**
-     * @brief Initializes the OrderBook and pre-allocates its MemoryPool.
-     * @param max_orders The total number of resting orders the engine can handle concurrently.
-     */
-    explicit OrderBook(size_t max_orders) : order_pool_(max_orders) {
-        order_map_.reserve(max_orders);
-        trades_.reserve(16384); // Pre-allocate internal trade log buffer (doubled from 8192)
-    }
+    explicit OrderBook(size_t max_orders, Price min_price, Price max_price);
 
-    /**
-     * @brief Process an incoming order (Limit, Market, or Cancel).
-     * @return An OrderResult containing trades and acceptance/cancellation status.
-     *
-     * Rejection reasons (accepted=false):
-     *   - Duplicate OrderId already exists in the book
-     *   - Zero quantity on a non-Cancel order
-     */
-    OrderResult add_order(OrderId id, OrderType type, Price price, Quantity quantity, Side side);
+    template <typename TradeCallback>
+    [[gnu::always_inline]] inline std::expected<void, RejectReason> add_order(OrderId id, OrderType type, Price price, Quantity quantity, Side side, TradeCallback&& on_trade);
 
-    /**
-     * @brief Cancels an existing order from the book via its ID in O(1) time.
-     * @return True if the order existed and was canceled perfectly.
-     */
-    bool cancel_order(OrderId id);
+    std::expected<void, RejectReason> cancel_order(OrderId id);
 
 private:
-    void match_order(Order* taker_order);
-    
-    // Internal pre-allocated trade buffer
-    std::vector<Trade> trades_;
+    template <Side side, typename TradeCallback>
+    [[gnu::always_inline]] inline void match_order(Order* taker_order, TradeCallback&& on_trade);
 
-    // Bid book (highest price first)
-    std::map<Price, PriceLevel, std::greater<Price>> bids_;
+    void update_best_bid_after_remove(Price removed_price);
+    void update_best_ask_after_remove(Price removed_price);
     
-    // Ask book (lowest price first)
-    std::map<Price, PriceLevel, std::less<Price>> asks_;
+    std::vector<uint64_t> bids_bitset_;
+    std::vector<uint64_t> asks_bitset_;
+
+    std::vector<PriceLevel> bids_levels_;
+    std::vector<PriceLevel> asks_levels_;
     
-    // Fast O(1) lookup for cancellations
-    std::unordered_map<OrderId, Order*> order_map_;
+    Price min_price_;
+    Price max_price_;
     
-    // Zero-allocation memory pool for Order structures
+    Price best_bid_;
+    Price best_ask_;
+    bool has_bids_;
+    
+    std::vector<Order*> order_map_;
     MemoryPool<Order> order_pool_;
 };
+
+// ====================================================================
+// TEMPLATE IMPLEMENTATIONS
+// ====================================================================
+
+template <Side side, typename TradeCallback>
+[[gnu::always_inline]] inline void OrderBook::match_order(Order* taker_order, TradeCallback&& on_trade) {
+    if constexpr (side == Side::Buy) {
+        // Cross against Asks (lowest to highest)
+        while (best_ask_ <= max_price_ && taker_order->quantity > 0 && taker_order->price >= best_ask_) {
+            PriceLevel& level = asks_levels_[best_ask_ - min_price_];
+            
+            Order* maker_order = level.head;
+            while (maker_order != nullptr && taker_order->quantity > 0) {
+                Quantity trade_qty = std::min(taker_order->quantity, maker_order->quantity);
+                Price trade_price = maker_order->price;
+                
+                on_trade(Trade{maker_order->id, taker_order->id, trade_price, trade_qty});
+                
+                taker_order->quantity -= trade_qty;
+                maker_order->quantity -= trade_qty;
+                level.total_quantity -= trade_qty;
+                
+                Order* next_maker = maker_order->next;
+
+                if (maker_order->quantity == 0) {
+                    level.remove_order(maker_order);
+                    order_map_[maker_order->id] = nullptr;
+                    order_pool_.deallocate(maker_order);
+                }
+                maker_order = next_maker;
+            }
+
+            if (level.is_empty()) {
+                // Clear the bit
+                size_t bit_idx = best_ask_ - min_price_;
+                asks_bitset_[bit_idx / 64] &= ~(1ULL << (bit_idx % 64));
+                
+                // Fast-forward best_ask_ using bitset
+                uint64_t word_idx = bit_idx / 64;
+                uint64_t mask = ~((1ULL << (bit_idx % 64)) - 1);
+                uint64_t word = asks_bitset_[word_idx] & mask;
+                
+                bool found = false;
+                if (word != 0) {
+                    best_ask_ = min_price_ + word_idx * 64 + std::countr_zero(word);
+                    found = true;
+                } else {
+                    for (size_t i = word_idx + 1; i < asks_bitset_.size(); ++i) {
+                        if (asks_bitset_[i] != 0) {
+                            best_ask_ = min_price_ + i * 64 + std::countr_zero(asks_bitset_[i]);
+                            found = true;
+                            break;
+                        }
+                    }
+                }
+                if (!found) {
+                    best_ask_ = max_price_ + 1; // Sentinel
+                }
+            }
+        }
+    } else {
+        // Cross against Bids (highest to lowest)
+        while (has_bids_ && taker_order->quantity > 0 && taker_order->price <= best_bid_) {
+            PriceLevel& level = bids_levels_[best_bid_ - min_price_];
+            
+            Order* maker_order = level.head;
+            while (maker_order != nullptr && taker_order->quantity > 0) {
+                Quantity trade_qty = std::min(taker_order->quantity, maker_order->quantity);
+                Price trade_price = maker_order->price;
+                
+                on_trade(Trade{maker_order->id, taker_order->id, trade_price, trade_qty});
+                
+                taker_order->quantity -= trade_qty;
+                maker_order->quantity -= trade_qty;
+                level.total_quantity -= trade_qty;
+                
+                Order* next_maker = maker_order->next;
+
+                if (maker_order->quantity == 0) {
+                    level.remove_order(maker_order);
+                    order_map_[maker_order->id] = nullptr;
+                    order_pool_.deallocate(maker_order);
+                }
+                maker_order = next_maker;
+            }
+
+            if (level.is_empty()) {
+                // Clear the bit
+                size_t bit_idx = best_bid_ - min_price_;
+                bids_bitset_[bit_idx / 64] &= ~(1ULL << (bit_idx % 64));
+                
+                // Fast-forward best_bid_ using bitset (scan downwards)
+                uint64_t word_idx = bit_idx / 64;
+                uint64_t mask = (1ULL << (bit_idx % 64)) - 1; // bits below current
+                uint64_t word = bids_bitset_[word_idx] & mask;
+                
+                bool found = false;
+                if (word != 0) {
+                    best_bid_ = min_price_ + word_idx * 64 + 63 - std::countl_zero(word);
+                    found = true;
+                } else {
+                    for (int64_t i = word_idx - 1; i >= 0; --i) {
+                        if (bids_bitset_[i] != 0) {
+                            best_bid_ = min_price_ + i * 64 + 63 - std::countl_zero(bids_bitset_[i]);
+                            found = true;
+                            break;
+                        }
+                    }
+                }
+                if (!found) {
+                    has_bids_ = false;
+                    best_bid_ = 0;
+                }
+            }
+        }
+    }
+}
+
+template <typename TradeCallback>
+[[gnu::always_inline]] inline std::expected<void, RejectReason> OrderBook::add_order(OrderId id, OrderType type, Price price, Quantity quantity, Side side, TradeCallback&& on_trade) {
+    if (type == OrderType::Cancel) {
+        return cancel_order(id);
+    }
+
+    if (quantity == 0) {
+        return std::unexpected(RejectReason::InvalidQuantity);
+    }
+
+    if (id >= order_map_.size()) {
+        return std::unexpected(RejectReason::OutOfBoundsOrderId);
+    }
+    
+    HFT_ASSUME(id < order_map_.size());
+
+    if (order_map_[id] != nullptr) {
+        return std::unexpected(RejectReason::DuplicateOrderId);
+    }
+
+    if (type == OrderType::Limit) {
+        if (price < min_price_ || price > max_price_) {
+            return std::unexpected(RejectReason::OutOfBoundsPrice);
+        }
+    }
+
+    HFT_ASSUME(quantity > 0);
+
+    Order* order = order_pool_.allocate();
+    order->id = id;
+    order->price = type == OrderType::Market
+                       ? (side == Side::Buy ? MARKET_BUY_PRICE : MARKET_SELL_PRICE)
+                       : price;
+    order->quantity = quantity;
+    order->side = side;
+    order->next = nullptr;
+    order->prev = nullptr;
+
+    if (side == Side::Buy) {
+        match_order<Side::Buy>(order, std::forward<TradeCallback>(on_trade));
+    } else {
+        match_order<Side::Sell>(order, std::forward<TradeCallback>(on_trade));
+    }
+
+    if (order->quantity > 0) {
+        if (type == OrderType::Market) {
+            order_pool_.deallocate(order);
+        } else {
+            order_map_[id] = order;
+            size_t bit_idx = order->price - min_price_;
+            if (side == Side::Buy) {
+                bids_levels_[bit_idx].append_order(order);
+                bids_bitset_[bit_idx / 64] |= (1ULL << (bit_idx % 64));
+                if (!has_bids_ || order->price > best_bid_) {
+                    best_bid_ = order->price;
+                    has_bids_ = true;
+                }
+            } else {
+                asks_levels_[bit_idx].append_order(order);
+                asks_bitset_[bit_idx / 64] |= (1ULL << (bit_idx % 64));
+                if (order->price < best_ask_) {
+                    best_ask_ = order->price;
+                }
+            }
+        }
+    } else {
+        order_pool_.deallocate(order);
+    }
+
+    return {};
+}
 
 } // namespace hft
