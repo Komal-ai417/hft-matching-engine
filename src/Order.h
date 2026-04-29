@@ -62,4 +62,4 @@ inline std::ostream& operator<<(std::ostream& os, const Side& side) {
     return os << (side == Side::Buy ? "Buy" : "Sell");
 }
 
-} // namespace hft
+}// namespace hft
