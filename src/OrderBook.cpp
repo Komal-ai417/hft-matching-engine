@@ -79,12 +79,12 @@ void OrderBook::update_best_bid_after_remove(Price removed_price) {
     }
 }
 
-std::expected<void, RejectReason> OrderBook::cancel_order(OrderId id) {
+void OrderBook::cancel_order(OrderId id) {
     if (id >= order_map_.size()) {
-        return std::unexpected(RejectReason::OutOfBoundsOrderId);
+        return;
     }
     if (order_map_[id] == nullptr) {
-        return std::unexpected(RejectReason::CancelFailed);
+        return;
     }
     
     Order* order = order_map_[id];
@@ -100,7 +100,7 @@ std::expected<void, RejectReason> OrderBook::cancel_order(OrderId id) {
     
     order_map_[id] = nullptr;
     order_pool_.deallocate(order);
-    return {};
+    return;
 }
 
 } // namespace hft

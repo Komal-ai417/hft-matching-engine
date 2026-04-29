@@ -4,7 +4,6 @@
 #include "PriceLevel.h"
 #include "MemoryPool.h"
 #include <vector>
-#include <expected>
 #include <bit>
 #include <algorithm>
 
@@ -37,9 +36,9 @@ public:
     explicit OrderBook(size_t max_orders, Price min_price, Price max_price);
 
     template <typename TradeCallback>
-    [[gnu::always_inline]] inline std::expected<void, RejectReason> add_order(OrderId id, OrderType type, Price price, Quantity quantity, Side side, TradeCallback&& on_trade);
+    [[gnu::always_inline]] inline void add_order(OrderId id, OrderType type, Price price, Quantity quantity, Side side, TradeCallback&& on_trade);
 
-    std::expected<void, RejectReason> cancel_order(OrderId id);
+    void cancel_order(OrderId id);
 
 private:
     template <Side side, typename TradeCallback>
@@ -184,28 +183,29 @@ template <Side side, typename TradeCallback>
 }
 
 template <typename TradeCallback>
-[[gnu::always_inline]] inline std::expected<void, RejectReason> OrderBook::add_order(OrderId id, OrderType type, Price price, Quantity quantity, Side side, TradeCallback&& on_trade) {
+[[gnu::always_inline]] inline void OrderBook::add_order(OrderId id, OrderType type, Price price, Quantity quantity, Side side, TradeCallback&& on_trade) {
     if (type == OrderType::Cancel) {
-        return cancel_order(id);
+        cancel_order(id);
+        return;
     }
 
     if (quantity == 0) {
-        return std::unexpected(RejectReason::InvalidQuantity);
+        return;
     }
 
     if (id >= order_map_.size()) {
-        return std::unexpected(RejectReason::OutOfBoundsOrderId);
+        return;
     }
     
     HFT_ASSUME(id < order_map_.size());
 
     if (order_map_[id] != nullptr) {
-        return std::unexpected(RejectReason::DuplicateOrderId);
+        return;
     }
 
     if (type == OrderType::Limit) {
         if (price < min_price_ || price > max_price_) {
-            return std::unexpected(RejectReason::OutOfBoundsPrice);
+            return;
         }
     }
 
@@ -252,7 +252,7 @@ template <typename TradeCallback>
         order_pool_.deallocate(order);
     }
 
-    return {};
+    return;
 }
 
 } // namespace hft
