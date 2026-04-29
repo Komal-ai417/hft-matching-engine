@@ -1,167 +1,106 @@
 #include "OrderBook.h"
-#include <algorithm>
 
 namespace hft {
 
-OrderResult OrderBook::add_order(OrderId id, OrderType type, Price price, Quantity quantity, Side side) {
-    trades_.clear(); // O(1) clear without freeing memory capacity
-
-    // --- Handle Cancel orders ---
-    if (type == OrderType::Cancel) {
-        bool ok = cancel_order(id);
-        return {std::move(trades_), ok, ok};
+OrderBook::OrderBook(size_t max_orders, Price min_price, Price max_price)
+    : min_price_(min_price), max_price_(max_price),
+      best_bid_(0), best_ask_(max_price + 1), has_bids_(false),
+      order_pool_(max_orders)
+{
+    order_map_.resize(max_orders + 1, nullptr);
+    size_t price_range = max_price - min_price + 1;
+    bids_levels_.resize(price_range);
+    asks_levels_.resize(price_range);
+    
+    size_t bitset_words = (price_range + 63) / 64;
+    bids_bitset_.resize(bitset_words, 0);
+    asks_bitset_.resize(bitset_words, 0);
+    
+    for (size_t i = 0; i < price_range; ++i) {
+        bids_levels_[i].price = min_price + i;
+        asks_levels_[i].price = min_price + i;
     }
+}
 
-    // --- Input validation (Issue #6) ---
-    if (quantity == 0) {
-        return {std::move(trades_), false, false}; // Reject zero-quantity orders
-    }
-
-    // --- Duplicate order ID check (Issue #1) ---
-    // Without this, the old Order* is silently overwritten in order_map_,
-    // leaking the pool slot and leaving dangling pointers in the PriceLevel.
-    if (order_map_.find(id) != order_map_.end()) {
-        return {std::move(trades_), false, false}; // Reject duplicate ID
-    }
-
-    // Allocate order from pool
-    Order* order = order_pool_.allocate();
-    order->id = id;
-    order->price = type == OrderType::Market
-                       ? (side == Side::Buy ? MARKET_BUY_PRICE : MARKET_SELL_PRICE)
-                       : price;
-    order->quantity = quantity;
-    order->side = side;
-    order->next = nullptr;
-    order->prev = nullptr;
-
-    match_order(order);
-
-    if (order->quantity > 0) {
-        if (type == OrderType::Market) {
-            // Market orders don't rest in the book.
-            order_pool_.deallocate(order);
+void OrderBook::update_best_ask_after_remove(Price removed_price) {
+    if (best_ask_ == removed_price && asks_levels_[removed_price - min_price_].is_empty()) {
+        size_t bit_idx = removed_price - min_price_;
+        asks_bitset_[bit_idx / 64] &= ~(1ULL << (bit_idx % 64));
+        
+        uint64_t word_idx = bit_idx / 64;
+        uint64_t mask = ~((1ULL << (bit_idx % 64)) - 1);
+        uint64_t word = asks_bitset_[word_idx] & mask;
+        
+        bool found = false;
+        if (word != 0) {
+            best_ask_ = min_price_ + word_idx * 64 + std::countr_zero(word);
+            found = true;
         } else {
-            // Rest in the book
-            order_map_[id] = order;
-            if (side == Side::Buy) {
-                auto result = bids_.emplace(order->price, order->price);
-                result.first->second.append_order(order);
-            } else {
-                auto result = asks_.emplace(order->price, order->price);
-                result.first->second.append_order(order);
+            for (size_t i = word_idx + 1; i < asks_bitset_.size(); ++i) {
+                if (asks_bitset_[i] != 0) {
+                    best_ask_ = min_price_ + i * 64 + std::countr_zero(asks_bitset_[i]);
+                    found = true;
+                    break;
+                }
             }
         }
-    } else {
-        // Taker order fully filled
-        order_pool_.deallocate(order);
-    }
-
-    return {std::move(trades_), true, false};
-}
-
-void OrderBook::match_order(Order* taker_order) {
-    
-    if (taker_order->side == Side::Buy) {
-        // Cross against Asks (lowest to highest)
-        auto it = asks_.begin();
-        while (it != asks_.end() && taker_order->quantity > 0) {
-            PriceLevel& level = it->second;
-            
-            if (taker_order->price < level.price) break; // No more matching prices
-
-            Order* maker_order = level.head;
-            while (maker_order != nullptr && taker_order->quantity > 0) {
-                Quantity trade_qty = std::min(taker_order->quantity, maker_order->quantity);
-                Price trade_price = maker_order->price; // Price improvement (Maker's price)
-                
-                trades_.push_back({maker_order->id, taker_order->id, trade_price, trade_qty});
-                
-                taker_order->quantity -= trade_qty;
-                maker_order->quantity -= trade_qty;
-                level.total_quantity -= trade_qty;
-                
-                Order* next_maker = maker_order->next;
-
-                if (maker_order->quantity == 0) {
-                    // Fully filled, remove from book
-                    level.remove_order(maker_order);
-                    order_map_.erase(maker_order->id);
-                    order_pool_.deallocate(maker_order);
-                }
-                
-                maker_order = next_maker;
-            }
-
-            if (level.is_empty()) {
-                it = asks_.erase(it);
-            } else {
-                ++it;
-            }
-        }
-    } else {
-        // Cross against Bids (highest to lowest)
-        auto it = bids_.begin();
-        while (it != bids_.end() && taker_order->quantity > 0) {
-            PriceLevel& level = it->second;
-            
-            if (taker_order->price > level.price) break;
-
-            Order* maker_order = level.head;
-            while (maker_order != nullptr && taker_order->quantity > 0) {
-                Quantity trade_qty = std::min(taker_order->quantity, maker_order->quantity);
-                Price trade_price = maker_order->price;
-                
-                trades_.push_back({maker_order->id, taker_order->id, trade_price, trade_qty});
-                
-                taker_order->quantity -= trade_qty;
-                maker_order->quantity -= trade_qty;
-                level.total_quantity -= trade_qty;
-                
-                Order* next_maker = maker_order->next;
-
-                if (maker_order->quantity == 0) {
-                    level.remove_order(maker_order);
-                    order_map_.erase(maker_order->id);
-                    order_pool_.deallocate(maker_order);
-                }
-                
-                maker_order = next_maker;
-            }
-
-            if (level.is_empty()) {
-                it = bids_.erase(it);
-            } else {
-                ++it;
-            }
+        if (!found) {
+            best_ask_ = max_price_ + 1;
         }
     }
 }
 
-bool OrderBook::cancel_order(OrderId id) {
-    auto it = order_map_.find(id);
-    if (it == order_map_.end()) return false;
+void OrderBook::update_best_bid_after_remove(Price removed_price) {
+    if (has_bids_ && best_bid_ == removed_price && bids_levels_[removed_price - min_price_].is_empty()) {
+        size_t bit_idx = removed_price - min_price_;
+        bids_bitset_[bit_idx / 64] &= ~(1ULL << (bit_idx % 64));
+        
+        uint64_t word_idx = bit_idx / 64;
+        uint64_t mask = (1ULL << (bit_idx % 64)) - 1;
+        uint64_t word = bids_bitset_[word_idx] & mask;
+        
+        bool found = false;
+        if (word != 0) {
+            best_bid_ = min_price_ + word_idx * 64 + 63 - std::countl_zero(word);
+            found = true;
+        } else {
+            for (int64_t i = word_idx - 1; i >= 0; --i) {
+                if (bids_bitset_[i] != 0) {
+                    best_bid_ = min_price_ + i * 64 + 63 - std::countl_zero(bids_bitset_[i]);
+                    found = true;
+                    break;
+                }
+            }
+        }
+        if (!found) {
+            has_bids_ = false;
+            best_bid_ = 0;
+        }
+    }
+}
+
+std::expected<void, RejectReason> OrderBook::cancel_order(OrderId id) {
+    if (id >= order_map_.size()) {
+        return std::unexpected(RejectReason::OutOfBoundsOrderId);
+    }
+    if (order_map_[id] == nullptr) {
+        return std::unexpected(RejectReason::CancelFailed);
+    }
     
-    Order* order = it->second;
+    Order* order = order_map_[id];
     Price price = order->price;
     
     if (order->side == Side::Buy) {
-        auto level_it = bids_.find(price);
-        if (level_it != bids_.end()) {
-            level_it->second.remove_order(order);
-            if (level_it->second.is_empty()) bids_.erase(level_it);
-        }
+        bids_levels_[price - min_price_].remove_order(order);
+        update_best_bid_after_remove(price);
     } else {
-         auto level_it = asks_.find(price);
-         if (level_it != asks_.end()) {
-             level_it->second.remove_order(order);
-             if (level_it->second.is_empty()) asks_.erase(level_it);
-         }
+        asks_levels_[price - min_price_].remove_order(order);
+        update_best_ask_after_remove(price);
     }
     
-    order_map_.erase(it);
+    order_map_[id] = nullptr;
     order_pool_.deallocate(order);
-    return true;
+    return {};
 }
 
 } // namespace hft
