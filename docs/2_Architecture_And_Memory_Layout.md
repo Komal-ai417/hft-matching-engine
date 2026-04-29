@@ -65,11 +65,11 @@ The `MemoryPool` pre-allocates an array of `N` `Order` structs inside a single c
 
 ```mermaid
 graph TD
-    subgraph Initialization [Boot Up]
-        A[vector allocation] --> B[next_free_ = &pool[0]]
-        B --> C[pool[0].next = &pool[1]]
-        C --> D[pool[1].next = &pool[2]]
-        D --> E[...]
+    subgraph Initialization ["Boot Up"]
+        A["1. vector allocates N Order structs"] --> B["2. next_free_ points to pool 0"]
+        B --> C["3. pool 0 next points to pool 1"]
+        C --> D["4. pool 1 next points to pool 2"]
+        D --> E["5. ... until pool N-1 next = nullptr"]
     end
 ```
 
