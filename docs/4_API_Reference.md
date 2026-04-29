@@ -2,7 +2,7 @@
 
 > Generated manually from source headers: `Order.h`, `PriceLevel.h`, `MemoryPool.h`, `OrderBook.h`
 >
-> **C++ Standard:** C++23 &nbsp;|&nbsp; **Namespace:** `hft`
+> **C++ Standard:** C++20 &nbsp;|&nbsp; **Namespace:** `hft`
 
 ---
 
@@ -64,7 +64,7 @@ Defined in `Order.h`. Specifies the behavior of the order.
 
 ### `enum class RejectReason : uint8_t`
 
-Defined in `OrderBook.h`. Error codes returned via `std::unexpected` when an order is rejected.
+Defined in `OrderBook.h`. Retained for potential future use (e.g., restoring `std::expected` return types). Currently, validation failures result in silent early returns.
 
 | Enumerator | Value | Trigger Condition |
 | :--- | :--- | :--- |
@@ -164,7 +164,7 @@ explicit OrderBook(size_t max_orders, Price min_price, Price max_price);
 ```cpp
 template <typename TradeCallback>
 [[gnu::always_inline]] inline
-std::expected<void, RejectReason> add_order(
+void add_order(
     OrderId id,
     OrderType type,
     Price price,
@@ -185,49 +185,34 @@ std::expected<void, RejectReason> add_order(
 | `side` | `Side` | `Buy` or `Sell`. For `Cancel`, this parameter is ignored. |
 | `on_trade` | `TradeCallback&&` | A callable with signature `void(const Trade&)`. Invoked synchronously for each fill. |
 
-**Returns:** `std::expected<void, RejectReason>`
+**Returns:** `void`
 
-| Return State | Meaning |
-| :--- | :--- |
-| `has_value() == true` | Order was accepted. It may have been fully filled, partially filled and resting, or resting with no matches. |
-| `has_value() == false` | Order was rejected. Call `.error()` to retrieve the `RejectReason`. |
+Invalid inputs (zero quantity, duplicate IDs, out-of-bounds prices/IDs) cause an immediate silent return with no side effects. This design avoids exception overhead on the hot-path.
 
 **Example:**
 
 ```cpp
-auto result = ob.add_order(
+ob.add_order(
     42, hft::OrderType::Limit, 10050, 100, hft::Side::Buy,
     [](const hft::Trade& t) {
         std::cout << t.quantity << " filled @ " << t.price << "\n";
     }
 );
-
-if (!result.has_value()) {
-    switch (result.error()) {
-        case hft::RejectReason::DuplicateOrderId:
-            std::cerr << "Duplicate!\n"; break;
-        // ...
-    }
-}
 ```
 
 #### `cancel_order`
 
 ```cpp
-std::expected<void, RejectReason> cancel_order(OrderId id);
+void cancel_order(OrderId id);
 ```
 
 | Parameter | Type | Description |
 | :--- | :--- | :--- |
 | `id` | `OrderId` | The ID of the order to cancel. |
 
-**Returns:** `std::expected<void, RejectReason>`
+**Returns:** `void`
 
-| Return State | Meaning |
-| :--- | :--- |
-| `has_value() == true` | Order was found, removed from its `PriceLevel`, and memory was returned to the pool. |
-| `error() == OutOfBoundsOrderId` | `id >= order_map_.size()`. |
-| `error() == CancelFailed` | No active order exists with this ID. |
+If the `id` is out of bounds or no active order exists with this ID, the function returns silently with no side effects.
 
 **Complexity:** $O(1)$ — direct array lookup + intrusive list unlink.
 

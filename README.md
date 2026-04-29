@@ -1,9 +1,9 @@
 # High-Frequency Trading (HFT) Matching Engine
 
-A blazingly fast Limit Order Book (LOB) matching engine written in modern C++23. Designed with the strict latency constraints of High-Frequency Trading (HFT) and quantitative finance in mind.
+A blazingly fast Limit Order Book (LOB) matching engine written in modern C++20. Designed with the strict latency constraints of High-Frequency Trading (HFT) and quantitative finance in mind.
 
 ![License](https://img.shields.io/badge/license-MIT-blue.svg)
-![C++](https://img.shields.io/badge/C++-23-blue.svg)
+![C++](https://img.shields.io/badge/C++-20-blue.svg)
 ![Build](https://img.shields.io/badge/build-passing-brightgreen.svg)
 
 ## System Architecture
@@ -54,9 +54,18 @@ graph TD
 
 ## Performance Metrics
 
-- **100,000 Orders Latency:** `~9 nanoseconds` (>100 million ops/sec)
-- **1,000,000 Orders Latency:** `~21 nanoseconds` (>45 million ops/sec)
-*(Measured on a standard consumer CPU utilizing GCC 15 `-O3` with L1i warmup)*
+**Google Benchmark** (GCC 13.3, `-O3`, Ubuntu 24.04, 2 × 2250 MHz CPU):
+
+| Benchmark | Time (ns) | CPU (ns) | Iterations |
+| :--- | ---: | ---: | ---: |
+| `BM_AddOrder_NoMatch` | 9.84 | 9.80 | 63,695,712 |
+| `BM_Matching` | 293 | 292 | 1,982,363 |
+| `BM_AddAndCancel` | 31.5 | 31.5 | 20,634,868 |
+| `BM_MarketOrder` | 233 | 234 | 3,038,167 |
+| `BM_SweepMultipleLevels` | 303 | 305 | 2,255,751 |
+
+- **Passive insertion:** `~9.8 ns/op` — over **100 million inserts/sec**
+- **Add-and-cancel round-trip:** `~31.5 ns/op` — $O(1)$ pool reclaim verified
 
 ## Core Design Principles
 
@@ -79,7 +88,7 @@ Orders are matched primarily on Price (highest bid vs lowest ask), and secondari
 - **$O(1)$ Cancellations:** A flat array `std::vector<Order*>` provides instant array lookup to cancel an order by simply unlinking its pointers from the `PriceLevel` without any branching or hashing overhead.
 
 ### 4. Structured Results & Input Validation
-- **`std::expected<void, RejectReason>`** API eliminates all exception overhead on the hot-path, replacing it with C++23's algebraic data types.
+- Validation errors (duplicate IDs, out-of-bounds prices, zero quantity) cause early returns on the hot-path, avoiding exception overhead entirely.
 - **Trade Callbacks** provide "zero-copy" execution by passing matched `Trade` structs directly to caller-defined lambdas without ever pushing to a `std::vector` heap buffer.
 - **Duplicate order IDs** are rejected before allocation, preventing memory pool leaks and dangling pointer corruption.
 
@@ -93,22 +102,15 @@ Orders are matched primarily on Price (highest bid vs lowest ask), and secondari
 hft::OrderBook ob(1'000'000, 0, 20000);
 
 // Submit a limit order with a callback lambda for trades
-auto result = ob.add_order(
+ob.add_order(
     1, hft::OrderType::Limit, 10050, 100, hft::Side::Buy,
     [](const hft::Trade& trade) {
         std::cout << "Trade! " << trade.quantity << " @ " << trade.price << "\n";
     }
 );
 
-if (!result.has_value()) {
-    std::cerr << "Order rejected!\n";
-}
-
 // Cancel an order
-auto cancel = ob.cancel_order(1);
-if (cancel.has_value()) {
-    // Order was successfully removed from the book
-}
+ob.cancel_order(1);
 ```
 
 ## Build Instructions
@@ -116,7 +118,7 @@ if (cancel.has_value()) {
 Dependencies (GoogleTest, Google Benchmark) are automatically downloaded via CMake FetchContent — no manual installation required.
 
 ### Prerequisites
-- GCC / G++ (or Clang) with C++23 support
+- GCC / G++ (or Clang) with C++20 support
 - CMake ≥ 3.14
 
 ### Building (Release)
@@ -157,22 +159,42 @@ cmake --build build-debug --config Debug -j$(nproc)
     Warmup complete.
 
 [1] Pure Insertion: 1000000 passive sell orders...
-    Inserted 1000000 orders in 9070 us
-    Avg latency: 9.1 ns/op
+    Inserted 1000000 orders in 16242 us
+    Avg latency: 16.2 ns/op
 
 [2] Pure Matching: 100000 aggressive buy orders against 100000 resting sells...
-    Matched 100000 orders in 2143 us
-    Avg latency: 21.4 ns/op
+    Matched 100000 orders in 2967 us
+    Avg latency: 29.7 ns/op
 
 [3] Pure Cancellation: 500000 cancel operations...
-    Cancelled 500000 orders in 6938 us
-    Avg latency: 13.9 ns/op
+    Cancelled 500000 orders in 4739 us
+    Avg latency: 9.5 ns/op
 
 [4] Mixed Workload: 1000000 ops (70% insert, 20% match, 10% cancel)...
-    Processed 1000000 ops in 15616 us
-    Avg latency: 15.6 ns/op
+    Processed 1000000 ops in 7583 us
+    Avg latency: 7.6 ns/op
 
 Engine run complete. Built for microsecond latency.
+```
+
+### Google Benchmark Output (`./hft_bench`)
+
+```text
+Running ./hft_bench
+Run on (2 X 2250 MHz CPU s)
+CPU Caches:
+  L1 Data 32 KiB (x1)
+  L1 Instruction 32 KiB (x1)
+  L2 Unified 512 KiB (x1)
+  L3 Unified 16384 KiB (x1)
+-----------------------------------------------------------------
+Benchmark                       Time             CPU   Iterations
+-----------------------------------------------------------------
+BM_AddOrder_NoMatch          9.84 ns         9.80 ns     63695712
+BM_Matching                   293 ns          292 ns      1982363
+BM_AddAndCancel              31.5 ns         31.5 ns     20634868
+BM_MarketOrder                233 ns          234 ns      3038167
+BM_SweepMultipleLevels        303 ns          305 ns      2255751
 ```
 
 ## Architectural Isolation (Production Environments)
