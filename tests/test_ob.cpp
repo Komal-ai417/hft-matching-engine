@@ -377,7 +377,12 @@ TEST(MemoryPoolTest, DoubleFreeThrows) {
     Order* o = pool.allocate();
     pool.deallocate(o);
 
-    EXPECT_THROW(pool.deallocate(o), std::logic_error);
+    try {
+        pool.deallocate(o);
+        FAIL() << "Should have thrown std::logic_error";
+    } catch (const std::logic_error& e) {
+        SUCCEED();
+    }
 }
 
 TEST(MemoryPoolTest, OutOfRangeThrows) {
