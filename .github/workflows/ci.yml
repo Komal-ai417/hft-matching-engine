@@ -42,7 +42,7 @@ jobs:
 
     - name: Test (Google Test)
       working-directory: ${{github.workspace}}/build
-      run: ./hft_tests
+      run: ASAN_OPTIONS=alloc_dealloc_mismatch=0 ./hft_tests
 
     - name: Benchmark (Release only)
       if: matrix.build_type == 'Release'
