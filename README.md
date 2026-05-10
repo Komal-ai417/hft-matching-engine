@@ -223,3 +223,7 @@ Comprehensive technical documentation is available in the [`docs/`](docs/) direc
 1. Adding SPSC (Single-Producer Single-Consumer) Lock-Free Queues to receive network packets from a separate I/O network thread.
 2. Implementing Self-Trade Prevention (STP) for regulatory compliance.
 3. Adding transactional exception safety guards around the matching loop.
+
+## License
+
+This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
