@@ -28,9 +28,7 @@ struct Trade {
     #include <cassert>
     #define HFT_ASSUME(cond) assert(cond)
 #else
-    #if defined(__clang__)
-        #define HFT_ASSUME(cond) __builtin_assume(cond)
-    #elif defined(__GNUC__)
+    #if defined(__clang__) || defined(__GNUC__)
         #define HFT_ASSUME(cond) do { if (!(cond)) __builtin_unreachable(); } while (0)
     #else
         #define HFT_ASSUME(cond) do { } while (0)
@@ -199,11 +197,12 @@ template <typename TradeCallback>
         return;
     }
 
-    if (id >= order_map_.size()) {
+    const size_t map_size = order_map_.size();
+    if (id >= map_size) {
         return;
     }
     
-    HFT_ASSUME(id < order_map_.size());
+    HFT_ASSUME(id < map_size);
 
     if (order_map_[id] != nullptr) {
         return;
