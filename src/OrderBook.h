@@ -28,13 +28,7 @@ struct Trade {
     #include <cassert>
     #define HFT_ASSUME(cond) assert(cond)
 #else
-    #if defined(__clang__)
-        #define HFT_ASSUME(cond) __builtin_assume(cond)
-    #elif defined(__GNUC__)
-        #define HFT_ASSUME(cond) do { if (!(cond)) __builtin_unreachable(); } while (0)
-    #else
-        #define HFT_ASSUME(cond) do { } while (0)
-    #endif
+    #define HFT_ASSUME(cond) [[assume(cond)]]
 #endif
 
 class OrderBook {

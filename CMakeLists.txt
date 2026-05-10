@@ -13,8 +13,13 @@ if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
     # Debug: sanitizers (optional) + debug symbols
     set(CMAKE_CXX_FLAGS_DEBUG "${CMAKE_CXX_FLAGS_DEBUG} -O0 -g -fno-omit-frame-pointer")
     
+    if(WIN32)
+    option(ENABLE_ASAN "Enable AddressSanitizer" OFF)
+    option(ENABLE_UBSAN "Enable UndefinedBehaviorSanitizer" OFF)
+else()
     option(ENABLE_ASAN "Enable AddressSanitizer" ON)
     option(ENABLE_UBSAN "Enable UndefinedBehaviorSanitizer" ON)
+endif()
 
     if(ENABLE_ASAN)
         set(CMAKE_CXX_FLAGS_DEBUG "${CMAKE_CXX_FLAGS_DEBUG} -fsanitize=address")
