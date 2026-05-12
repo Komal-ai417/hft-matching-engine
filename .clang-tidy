@@ -1,0 +1,6 @@
+---
+Checks:          'performance-*,bugprone-*,modernize-*,cppcoreguidelines-*,-bugprone-exception-escape,-cppcoreguidelines-pro-bounds-pointer-arithmetic,-cppcoreguidelines-pro-type-vararg,-modernize-use-trailing-return-type'
+WarningsAsErrors: 'performance-*,bugprone-*'
+HeaderFilterRegex: '.*'
+FormatStyle:     file
+...

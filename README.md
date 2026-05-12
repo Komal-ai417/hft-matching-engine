@@ -4,7 +4,7 @@ A blazingly fast Limit Order Book (LOB) matching engine written in modern C++20.
 
 ![License](https://img.shields.io/badge/license-MIT-blue.svg)
 ![C++](https://img.shields.io/badge/C++-20-blue.svg)
-![Build](https://img.shields.io/badge/build-passing-brightgreen.svg)
+[![C++ CI](https://github.com/Komal-ai417/hft-matching-engine/actions/workflows/ci.yml/badge.svg)](https://github.com/Komal-ai417/hft-matching-engine/actions/workflows/ci.yml)
 
 ## System Architecture
 
