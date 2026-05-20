@@ -1,20 +1,24 @@
 #include <benchmark/benchmark.h>
 #include "../src/OrderBook.h"
+#include "StdOrderBook.h"
 
 using namespace hft;
 
+template <class BookType>
 static void BM_AddOrder_NoMatch(benchmark::State& state) {
-    OrderBook ob(state.max_iterations + 10, 0, 2000);
+    BookType ob(state.max_iterations + 10, 0, 2000);
     OrderId id = 1;
     for (auto _ : state) {
         // Just adding to the book without matching (best case insert)
         ob.add_order(id++, OrderType::Limit, 100, 10, Side::Sell, [](const Trade&){});
     }
 }
-BENCHMARK(BM_AddOrder_NoMatch);
+BENCHMARK_TEMPLATE(BM_AddOrder_NoMatch, OrderBook);
+BENCHMARK_TEMPLATE(BM_AddOrder_NoMatch, StdOrderBook);
 
+template <class BookType>
 static void BM_Matching(benchmark::State& state) {
-    OrderBook ob(state.max_iterations * 2 + 10, 0, 2000);
+    BookType ob(state.max_iterations * 2 + 10, 0, 2000);
     OrderId id = 1;
     for (auto _ : state) {
         state.PauseTiming();
@@ -25,10 +29,12 @@ static void BM_Matching(benchmark::State& state) {
         ob.add_order(id++, OrderType::Limit, 100, 10, Side::Buy, [](const Trade&){});
     }
 }
-BENCHMARK(BM_Matching);
+BENCHMARK_TEMPLATE(BM_Matching, OrderBook);
+BENCHMARK_TEMPLATE(BM_Matching, StdOrderBook);
 
+template <class BookType>
 static void BM_AddAndCancel(benchmark::State& state) {
-    OrderBook ob(state.max_iterations + 10, 0, 2000);
+    BookType ob(state.max_iterations + 10, 0, 2000);
     OrderId id = 1;
     for (auto _ : state) {
         ob.add_order(id, OrderType::Limit, 100, 10, Side::Sell, [](const Trade&){});
@@ -36,10 +42,12 @@ static void BM_AddAndCancel(benchmark::State& state) {
         id++;
     }
 }
-BENCHMARK(BM_AddAndCancel);
+BENCHMARK_TEMPLATE(BM_AddAndCancel, OrderBook);
+BENCHMARK_TEMPLATE(BM_AddAndCancel, StdOrderBook);
 
+template <class BookType>
 static void BM_MarketOrder(benchmark::State& state) {
-    OrderBook ob(state.max_iterations * 2 + 10, 0, 2000);
+    BookType ob(state.max_iterations * 2 + 10, 0, 2000);
     OrderId id = 1;
     for (auto _ : state) {
         state.PauseTiming();
@@ -49,10 +57,12 @@ static void BM_MarketOrder(benchmark::State& state) {
         ob.add_order(id++, OrderType::Market, 0, 10, Side::Buy, [](const Trade&){});
     }
 }
-BENCHMARK(BM_MarketOrder);
+BENCHMARK_TEMPLATE(BM_MarketOrder, OrderBook);
+BENCHMARK_TEMPLATE(BM_MarketOrder, StdOrderBook);
 
+template <class BookType>
 static void BM_SweepMultipleLevels(benchmark::State& state) {
-    OrderBook ob(state.max_iterations * 11 + 10, 0, 2000);
+    BookType ob(state.max_iterations * 11 + 10, 0, 2000);
     OrderId id = 1;
     for (auto _ : state) {
         state.PauseTiming();
@@ -66,6 +76,7 @@ static void BM_SweepMultipleLevels(benchmark::State& state) {
         ob.add_order(id++, OrderType::Limit, 200, 100, Side::Buy, [](const Trade&){});
     }
 }
-BENCHMARK(BM_SweepMultipleLevels);
+BENCHMARK_TEMPLATE(BM_SweepMultipleLevels, OrderBook);
+BENCHMARK_TEMPLATE(BM_SweepMultipleLevels, StdOrderBook);
 
 BENCHMARK_MAIN();
