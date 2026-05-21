@@ -182,7 +182,7 @@ Engine run complete. Built for microsecond latency.
 ### Google Benchmark Output (`./hft_bench`)
 
 ```text
-Running C:\Users\karya\Codes\hft-matching-engine\build\hft_bench.exe
+Running hft-matching-engine\build\hft_bench.exe
 Run on (12 X 2611 MHz CPU s)
 CPU Caches:
   L1 Data 48 KiB (x6)
