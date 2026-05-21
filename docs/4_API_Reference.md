@@ -78,9 +78,9 @@ Defined in `OrderBook.h`. Retained for potential future use (e.g., restoring `st
 
 ## 4. Structs
 
-### `struct alignas(64) Order`
+### `struct Order`
 
-Defined in `Order.h`. Represents a single order in the Limit Order Book. Aligned to 64 bytes to prevent CPU cache-line splitting.
+Defined in `Order.h`. Represents a single order in the Limit Order Book. Uses natural 8-byte alignment (40 bytes total) for maximum cache density.
 
 | Field | Type | Description |
 | :--- | :--- | :--- |
@@ -91,7 +91,7 @@ Defined in `Order.h`. Represents a single order in the Limit Order Book. Aligned
 | `next` | `Order*` | Intrusive linked-list pointer to the next order in the `PriceLevel` queue. |
 | `prev` | `Order*` | Intrusive linked-list pointer to the previous order in the `PriceLevel` queue. |
 
-**Memory Layout (64 bytes, single cache line):**
+**Memory Layout (40 bytes, natural 8-byte alignment):**
 
 ```
 Offset  Field       Size
@@ -103,7 +103,6 @@ Offset  Field       Size
 0x15    (padding)   3 bytes
 0x18    next        8 bytes
 0x20    prev        8 bytes
-0x28    (padding)   24 bytes  ← alignas(64) tail padding
 ```
 
 ### `struct Trade`
@@ -264,7 +263,7 @@ Returns a previously allocated object back to the free-list.
 
 **Throws:**
 - `std::out_of_range` if `ptr` does not belong to this pool (pointer arithmetic bounds check).
-- `std::logic_error` if the slot is already free (double-free detection via allocation bitmap).
+- `std::logic_error` if the slot is already free (double-free detection via allocation byte-tracking vector).
 
 **Complexity:** $O(1)$.
 

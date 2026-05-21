@@ -39,8 +39,10 @@ enum class OrderType : uint8_t {
  * self-contained, allowing dense packing inside the `MemoryPool` and
  * massively improving L1/L2 cache hit rates during order traversal.
  * 
- * We align to 64 bytes to ensure an `Order` never strides two 64-byte 
- * CPU cache lines, preventing cache tearing on modern x86/ARM processors.
+ * The struct uses natural 8-byte alignment (40 bytes total). Since the
+ * matching engine is single-threaded, cache-line alignment (alignas(64))
+ * is intentionally avoided — it wastes 24 bytes of padding per order,
+ * reducing cache density by 37.5% with no benefit in a single-core context.
  */
 struct Order {
     OrderId id;           // 8 bytes

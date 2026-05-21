@@ -4,20 +4,22 @@
 
 This matching engine was engineered specifically to adhere to the rigid micro-architectural constraints of modern x86-64 and ARM processors. By intentionally circumventing the operating system scheduler and avoiding traditional runtime software paradigms, the engine achieves deterministic, sub-microsecond execution latency.
 
-### Core Metrics Summary (Google Benchmark, Release `-O3`)
+### Core Metrics Summary (Google Benchmark, Release `-O2`)
 
 | Benchmark | Time (ns) | CPU (ns) | Iterations |
 | :--- | ---: | ---: | ---: |
-| `BM_AddOrder_NoMatch` | 9.84 | 9.80 | 63,695,712 |
-| `BM_Matching` | 293 | 292 | 1,982,363 |
-| `BM_AddAndCancel` | 31.5 | 31.5 | 20,634,868 |
-| `BM_MarketOrder` | 233 | 234 | 3,038,167 |
-| `BM_SweepMultipleLevels` | 303 | 305 | 2,255,751 |
+| `BM_AddOrder_NoMatch` | 9.90 | 9.00 | 74,666,667 |
+| `BM_Matching_DeepBook` | 135 | 125 | 10,000,000 |
+| `BM_BatchMatching` | 368 | 305 | 1,792,000 |
+| `BM_AddAndCancel` | 35.0 | 31.8 | 23,578,947 |
+| `BM_CancelInDeepBook` | 15.9 | 12.3 | 74,666,667 |
+| `BM_MarketOrder_DeepBook` | 157 | 142 | 10,000,000 |
+| `BM_SweepMultipleLevels` | 555 | 578 | 1,000,000 |
 
-- **Single-level insertion:** `~9.8 ns/op` — over **100 million passive inserts/sec**.
-- **Single-level match (1:1):** `~293 ns/op` — includes `PauseTiming`/`ResumeTiming` overhead for resting order setup.
-- **Add-and-cancel round-trip:** `~31.5 ns/op` — demonstrates $O(1)$ pool reclamation.
-- **10-level aggressive sweep:** `~303 ns/op` — crosses 10 price levels in a single invocation.
+- **Single-level insertion:** `~9.9 ns/op` — over **100 million passive inserts/sec**.
+- **Single match against deep book:** `~135 ns/op` — bitset-accelerated best-price lookup.
+- **Add-and-cancel round-trip:** `~35 ns/op` — demonstrates $O(1)$ pool reclamation.
+- **20-level aggressive sweep:** `~555 ns/op` — crosses 20 price levels with batch sweep optimization.
 
 ---
 
@@ -68,11 +70,11 @@ Modern CPU cache misses to main memory cost roughly ~100 nanoseconds. Therefore,
 ### The $O(1)$ Flat Array Locator
 Instead of `std::map` or `std::unordered_map` (which allocate disjointed heap nodes and cause immediate L3 cache thrashing), we utilize a dense, flat `std::vector<Order*>` pre-sized to `1,000,000` pointers. Lookup by `OrderId` maps directly to a sequential memory address.
 
-### `alignas(64)` Intrusive Linked Lists
+### Compact Intrusive Linked Lists
 Standard `std::list<Order>` requires an internal node pointer and heap allocations per insert. We solved this by defining our orders as intrusive:
 
 ```cpp
-struct alignas(64) Order {
+struct Order {  // 40 bytes, natural 8-byte alignment
     OrderId id;
     Price price;
     Quantity quantity;
@@ -81,7 +83,7 @@ struct alignas(64) Order {
     Order* prev; 
 };
 ```
-By forcing 64-byte alignment, we guarantee that reading an `Order` struct will load perfectly into a single x86 cache line, preventing "false sharing" and split-line penalties.
+The struct is kept at a lean 40 bytes with natural 8-byte alignment. Since the matching engine is single-threaded, cache-line alignment (`alignas(64)`) is intentionally avoided — it wastes 24 bytes of padding per order (37.5% overhead), reducing cache density with no benefit in a single-core context. The compact layout allows 1.6× more orders to fit per cache line.
 
 ---
 

@@ -32,10 +32,10 @@ graph LR
         T[Tail Pointer]
     end
 
-    subgraph Memory Pool Data [Pre-allocated Stack]
-        O1[Order A<br>alignas 64]
-        O2[Order B<br>alignas 64]
-        O3[Order C<br>alignas 64]
+    subgraph Memory Pool Data ["Pre-allocated Stack"]
+        O1["Order A"]
+        O2["Order B"]
+        O3["Order C"]
     end
 
     H --> O1
@@ -77,15 +77,15 @@ graph TD
 When an order arrives, `engine` calls `pool.allocate()`:
 1. `obj = next_free_`
 2. `next_free_ = obj->next` (Advances stack)
-3. Bitmap flips `allocated_[index] = true`
+3. Allocation byte flips `allocated_[index] = 1`
 4. Returns `obj`.
 
 ### Deallocation Flow & Double-Free Protection
 When an order executes or cancels:
 1. Engine calls `pool.deallocate(ptr)`
 2. Calculates index via pointer arithmetic: `ptr - pool.data()`
-3. Checks `allocated_[index]`. If `false`, it throws `std::logic_error("Double free detected")`. This is vital because double-frees corrupt the LIFO structure, causing two clients to own the same memory address.
-4. Flips `allocated_[index] = false`.
+3. Checks `allocated_[index]`. If `0`, it throws `std::logic_error("Double free detected")`. This is vital because double-frees corrupt the LIFO structure, causing two clients to own the same memory address.
+4. Flips `allocated_[index] = 0`.
 5. Pushes back to stack: `ptr->next = next_free_; next_free_ = ptr;`
 
 This technique completely bypasses the OS `malloc`/`free` global locks, resolving all memory operations within CPU registers.

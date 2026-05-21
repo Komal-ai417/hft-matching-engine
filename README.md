@@ -54,18 +54,20 @@ graph TD
 
 ## Performance Metrics
 
-**Google Benchmark** (GCC 13.3, `-O3`, Ubuntu 24.04, 2 × 2250 MHz CPU):
+**Google Benchmark** (MSVC, `-O2`, Windows, 12 × 2611 MHz CPU):
 
 | Benchmark | Time (ns) | CPU (ns) | Iterations |
 | :--- | ---: | ---: | ---: |
-| `BM_AddOrder_NoMatch` | 9.84 | 9.80 | 63,695,712 |
-| `BM_Matching` | 293 | 292 | 1,982,363 |
-| `BM_AddAndCancel` | 31.5 | 31.5 | 20,634,868 |
-| `BM_MarketOrder` | 233 | 234 | 3,038,167 |
-| `BM_SweepMultipleLevels` | 303 | 305 | 2,255,751 |
+| `BM_AddOrder_NoMatch` | 9.90 | 9.00 | 74,666,667 |
+| `BM_Matching_DeepBook` | 135 | 125 | 10,000,000 |
+| `BM_BatchMatching` | 368 | 305 | 1,792,000 |
+| `BM_AddAndCancel` | 35.0 | 31.8 | 23,578,947 |
+| `BM_CancelInDeepBook` | 15.9 | 12.3 | 74,666,667 |
+| `BM_MarketOrder_DeepBook` | 157 | 142 | 10,000,000 |
+| `BM_SweepMultipleLevels` | 555 | 578 | 1,000,000 |
 
-- **Passive insertion:** `~9.8 ns/op` — over **100 million inserts/sec**
-- **Add-and-cancel round-trip:** `~31.5 ns/op` — $O(1)$ pool reclaim verified
+- **Passive insertion:** `~9.9 ns/op` — over **100 million inserts/sec**
+- **Add-and-cancel round-trip:** `~35 ns/op` — $O(1)$ pool reclaim verified
 
 ## Core Design Principles
 
@@ -79,7 +81,7 @@ In C++, `new` and `malloc` require expensive context switches to the Operating S
 ### 2. Cache Locality & Intrusive Data Structures
 Standard library containers (like `std::list`) allocate individual nodes across the heap, causing severe memory fragmentation and destroying CPU L1/L2 cache coherence via cache misses.
 - **Solution:** We explicitly avoid `std::list`. Instead, we use **Intrusive Doubly-Linked Lists**. The `Order` struct itself contains the `next` and `prev` pointers. When an order is added to a `PriceLevel`, we merely update the pointers. This keeps the memory incredibly dense and cache-friendly.
-- **Alignment:** Orders are `alignas(64)` to ensure they never straddle two 64-byte CPU cache lines on modern x86/ARM processors.
+- **Compact Layout:** The `Order` struct is kept at a lean 40 bytes with natural 8-byte alignment, allowing maximum cache density. Since the engine is single-threaded, cache-line alignment (which wastes padding) is intentionally avoided to pack more orders per cache line.
 
 ### 3. Price-Time Priority Matching
 Orders are matched primarily on Price (highest bid vs lowest ask), and secondarily on Time (First-In, First-Out).
@@ -143,7 +145,7 @@ cmake --build build-debug --config Debug -j$(nproc)
 # Custom benchmark (4 separate workloads)
 ./build/hft_engine
 
-# Google Test suite (28 test cases)
+# Google Test suite (30 test cases)
 ./build/hft_tests
 
 # Google Benchmark (microbenchmarks)
@@ -159,20 +161,20 @@ cmake --build build-debug --config Debug -j$(nproc)
     Warmup complete.
 
 [1] Pure Insertion: 1000000 passive sell orders...
-    Inserted 1000000 orders in 16242 us
-    Avg latency: 16.2 ns/op
+    Inserted 1000000 orders in 10920 us
+    Avg latency: 10.9 ns/op
 
 [2] Pure Matching: 100000 aggressive buy orders against 100000 resting sells...
-    Matched 100000 orders in 2967 us
-    Avg latency: 29.7 ns/op
+    Matched 100000 orders in 1443 us
+    Avg latency: 14.4 ns/op
 
 [3] Pure Cancellation: 500000 cancel operations...
-    Cancelled 500000 orders in 4739 us
-    Avg latency: 9.5 ns/op
+    Cancelled 500000 orders in 4641 us
+    Avg latency: 9.3 ns/op
 
 [4] Mixed Workload: 1000000 ops (70% insert, 20% match, 10% cancel)...
-    Processed 1000000 ops in 7583 us
-    Avg latency: 7.6 ns/op
+    Processed 1000000 ops in 8150 us
+    Avg latency: 8.2 ns/op
 
 Engine run complete. Built for microsecond latency.
 ```
@@ -181,20 +183,29 @@ Engine run complete. Built for microsecond latency.
 
 ```text
 Running ./hft_bench
-Run on (2 X 2250 MHz CPU s)
+Run on (12 X 2611 MHz CPU s)
 CPU Caches:
-  L1 Data 32 KiB (x1)
-  L1 Instruction 32 KiB (x1)
-  L2 Unified 512 KiB (x1)
-  L3 Unified 16384 KiB (x1)
------------------------------------------------------------------
-Benchmark                       Time             CPU   Iterations
------------------------------------------------------------------
-BM_AddOrder_NoMatch          9.84 ns         9.80 ns     63695712
-BM_Matching                   293 ns          292 ns      1982363
-BM_AddAndCancel              31.5 ns         31.5 ns     20634868
-BM_MarketOrder                233 ns          234 ns      3038167
-BM_SweepMultipleLevels        303 ns          305 ns      2255751
+  L1 Data 48 KiB (x6)
+  L1 Instruction 32 KiB (x6)
+  L2 Unified 1280 KiB (x6)
+  L3 Unified 12288 KiB (x1)
+--------------------------------------------------------------------------------
+Benchmark                                      Time             CPU   Iterations
+--------------------------------------------------------------------------------
+BM_AddOrder_NoMatch<OrderBook>              9.90 ns         9.00 ns     74666667
+BM_AddOrder_NoMatch<StdOrderBook>            167 ns          157 ns      4480000
+BM_Matching_DeepBook<OrderBook>              135 ns          125 ns     10000000
+BM_Matching_DeepBook<StdOrderBook>           585 ns          541 ns      2800000
+BM_BatchMatching<OrderBook>                  368 ns          305 ns      1792000
+BM_BatchMatching<StdOrderBook>               951 ns          766 ns      1000000
+BM_AddAndCancel<OrderBook>                  35.0 ns         31.8 ns     23578947
+BM_AddAndCancel<StdOrderBook>                186 ns          186 ns      3446154
+BM_CancelInDeepBook<OrderBook>              15.9 ns         12.3 ns     74666667
+BM_CancelInDeepBook<StdOrderBook>            161 ns          145 ns      5600000
+BM_MarketOrder_DeepBook<OrderBook>           157 ns          142 ns     10000000
+BM_MarketOrder_DeepBook<StdOrderBook>        482 ns          451 ns      2357895
+BM_SweepMultipleLevels<OrderBook>            555 ns          578 ns      1000000
+BM_SweepMultipleLevels<StdOrderBook>        2081 ns         1758 ns       373333
 ```
 
 ## Architectural Isolation (Production Environments)
