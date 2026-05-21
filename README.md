@@ -58,16 +58,16 @@ graph TD
 
 | Benchmark | Time (ns) | CPU (ns) | Iterations |
 | :--- | ---: | ---: | ---: |
-| `BM_AddOrder_NoMatch` | 9.90 | 9.00 | 74,666,667 |
-| `BM_Matching_DeepBook` | 135 | 125 | 10,000,000 |
-| `BM_BatchMatching` | 368 | 305 | 1,792,000 |
-| `BM_AddAndCancel` | 35.0 | 31.8 | 23,578,947 |
-| `BM_CancelInDeepBook` | 15.9 | 12.3 | 74,666,667 |
-| `BM_MarketOrder_DeepBook` | 157 | 142 | 10,000,000 |
-| `BM_SweepMultipleLevels` | 555 | 578 | 1,000,000 |
+| `BM_AddOrder_NoMatch` | 7.14 | 7.01 | 26,760,533 |
+| `BM_Matching_DeepBook` | 54.3 | 47.1 | 2,986,667 |
+| `BM_BatchMatching` | 327 | 349 | 448,000 |
+| `BM_AddAndCancel` | 32.6 | 32.7 | 6,690,133 |
+| `BM_CancelInDeepBook` | 10.7 | 7.82 | 17,983,078 |
+| `BM_MarketOrder_DeepBook` | 56.7 | 55.8 | 4,480,000 |
+| `BM_SweepMultipleLevels` | 516 | 525 | 267,605 |
 
-- **Passive insertion:** `~9.9 ns/op` — over **100 million inserts/sec**
-- **Add-and-cancel round-trip:** `~35 ns/op` — $O(1)$ pool reclaim verified
+- **Passive insertion:** `~7.1 ns/op` — over **140 million inserts/sec**
+- **Add-and-cancel round-trip:** `~32.6 ns/op` — $O(1)$ pool reclaim verified
 
 ## Core Design Principles
 
@@ -182,7 +182,7 @@ Engine run complete. Built for microsecond latency.
 ### Google Benchmark Output (`./hft_bench`)
 
 ```text
-Running ./hft_bench
+Running C:\Users\karya\Codes\hft-matching-engine\build\hft_bench.exe
 Run on (12 X 2611 MHz CPU s)
 CPU Caches:
   L1 Data 48 KiB (x6)
@@ -192,20 +192,20 @@ CPU Caches:
 --------------------------------------------------------------------------------
 Benchmark                                      Time             CPU   Iterations
 --------------------------------------------------------------------------------
-BM_AddOrder_NoMatch<OrderBook>              9.90 ns         9.00 ns     74666667
-BM_AddOrder_NoMatch<StdOrderBook>            167 ns          157 ns      4480000
-BM_Matching_DeepBook<OrderBook>              135 ns          125 ns     10000000
-BM_Matching_DeepBook<StdOrderBook>           585 ns          541 ns      2800000
-BM_BatchMatching<OrderBook>                  368 ns          305 ns      1792000
-BM_BatchMatching<StdOrderBook>               951 ns          766 ns      1000000
-BM_AddAndCancel<OrderBook>                  35.0 ns         31.8 ns     23578947
-BM_AddAndCancel<StdOrderBook>                186 ns          186 ns      3446154
-BM_CancelInDeepBook<OrderBook>              15.9 ns         12.3 ns     74666667
-BM_CancelInDeepBook<StdOrderBook>            161 ns          145 ns      5600000
-BM_MarketOrder_DeepBook<OrderBook>           157 ns          142 ns     10000000
-BM_MarketOrder_DeepBook<StdOrderBook>        482 ns          451 ns      2357895
-BM_SweepMultipleLevels<OrderBook>            555 ns          578 ns      1000000
-BM_SweepMultipleLevels<StdOrderBook>        2081 ns         1758 ns       373333
+BM_AddOrder_NoMatch<OrderBook>              7.14 ns         7.01 ns     26760533
+BM_AddOrder_NoMatch<StdOrderBook>            160 ns          156 ns       802816
+BM_Matching_DeepBook<OrderBook>             54.3 ns         47.1 ns      2986667
+BM_Matching_DeepBook<StdOrderBook>           224 ns          209 ns       896000
+BM_BatchMatching<OrderBook>                  327 ns          349 ns       448000
+BM_BatchMatching<StdOrderBook>               777 ns         1012 ns       200704
+BM_AddAndCancel<OrderBook>                  32.6 ns         32.7 ns      6690133
+BM_AddAndCancel<StdOrderBook>                185 ns          156 ns       802816
+BM_CancelInDeepBook<OrderBook>              10.7 ns         7.82 ns     17983078
+BM_CancelInDeepBook<StdOrderBook>            115 ns          122 ns       896000
+BM_MarketOrder_DeepBook<OrderBook>          56.7 ns         55.8 ns      4480000
+BM_MarketOrder_DeepBook<StdOrderBook>        215 ns          214 ns       802816
+BM_SweepMultipleLevels<OrderBook>            516 ns          525 ns       267605
+BM_SweepMultipleLevels<StdOrderBook>        2854 ns         2790 ns        44800
 ```
 
 ## Architectural Isolation (Production Environments)

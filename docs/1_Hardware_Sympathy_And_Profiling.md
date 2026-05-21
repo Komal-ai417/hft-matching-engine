@@ -8,18 +8,18 @@ This matching engine was engineered specifically to adhere to the rigid micro-ar
 
 | Benchmark | Time (ns) | CPU (ns) | Iterations |
 | :--- | ---: | ---: | ---: |
-| `BM_AddOrder_NoMatch` | 9.90 | 9.00 | 74,666,667 |
-| `BM_Matching_DeepBook` | 135 | 125 | 10,000,000 |
-| `BM_BatchMatching` | 368 | 305 | 1,792,000 |
-| `BM_AddAndCancel` | 35.0 | 31.8 | 23,578,947 |
-| `BM_CancelInDeepBook` | 15.9 | 12.3 | 74,666,667 |
-| `BM_MarketOrder_DeepBook` | 157 | 142 | 10,000,000 |
-| `BM_SweepMultipleLevels` | 555 | 578 | 1,000,000 |
+| `BM_AddOrder_NoMatch` | 7.14 | 7.01 | 26,760,533 |
+| `BM_Matching_DeepBook` | 54.3 | 47.1 | 2,986,667 |
+| `BM_BatchMatching` | 327 | 349 | 448,000 |
+| `BM_AddAndCancel` | 32.6 | 32.7 | 6,690,133 |
+| `BM_CancelInDeepBook` | 10.7 | 7.82 | 17,983,078 |
+| `BM_MarketOrder_DeepBook` | 56.7 | 55.8 | 4,480,000 |
+| `BM_SweepMultipleLevels` | 516 | 525 | 267,605 |
 
-- **Single-level insertion:** `~9.9 ns/op` — over **100 million passive inserts/sec**.
-- **Single match against deep book:** `~135 ns/op` — bitset-accelerated best-price lookup.
-- **Add-and-cancel round-trip:** `~35 ns/op` — demonstrates $O(1)$ pool reclamation.
-- **20-level aggressive sweep:** `~555 ns/op` — crosses 20 price levels with batch sweep optimization.
+- **Single-level insertion:** `~7.1 ns/op` — over **140 million passive inserts/sec**.
+- **Single match against deep book:** `~54.3 ns/op` — bitset-accelerated best-price lookup.
+- **Add-and-cancel round-trip:** `~32.6 ns/op` — demonstrates $O(1)$ pool reclamation.
+- **20-level aggressive sweep:** `~516 ns/op` — crosses 20 price levels with batch sweep optimization.
 
 ---
 
