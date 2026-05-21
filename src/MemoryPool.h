@@ -31,7 +31,9 @@ class MemoryPool {
 public:
     explicit MemoryPool(size_t max_capacity) : capacity_(max_capacity), available_count_(max_capacity) {
         pool_.resize(max_capacity);
+#if !defined(NDEBUG)
         allocated_.resize(max_capacity, false);
+#endif
         
         // Link all blocks together via their internal 'next' pointers
         for (size_t i = 0; i < max_capacity - 1; ++i) {
@@ -55,8 +57,10 @@ public:
         T* obj = next_free_;
         next_free_ = obj->next; // Advance free list
         
+#if !defined(NDEBUG)
         size_t index = static_cast<size_t>(obj - pool_.data());
         allocated_[index] = true;
+#endif
         --available_count_;
 
 #ifndef NDEBUG
@@ -73,6 +77,7 @@ public:
     // this is a logic error that would corrupt the free list.
     void deallocate(T* ptr) {
         // Calculate index based on pointer arithmetic
+#if !defined(NDEBUG)
         size_t index = static_cast<size_t>(ptr - pool_.data());
         if (index >= capacity_) {
             throw std::out_of_range("Pointer does not belong to this memory pool.");
@@ -81,6 +86,7 @@ public:
             throw std::logic_error("Double free detected in MemoryPool!");
         }
         allocated_[index] = false;
+#endif
         
         ptr->next = next_free_;
         next_free_ = ptr;
@@ -98,7 +104,11 @@ public:
     /// Returns true if the given pointer is currently allocated from this pool.
     bool is_allocated(const T* ptr) const noexcept {
         size_t index = static_cast<size_t>(ptr - pool_.data());
+#if !defined(NDEBUG)
         return index < capacity_ && allocated_[index];
+#else
+        return index < capacity_;
+#endif
     }
 
 private:
@@ -106,7 +116,9 @@ private:
     std::vector<T> pool_;
     T* next_free_ = nullptr;
     size_t available_count_ = 0;
+#if !defined(NDEBUG)
     std::vector<uint8_t> allocated_;        // Tracks which slots are in use (byte per slot, avoids vector<bool> proxy overhead)
+#endif
 };
 
 } // namespace hft

@@ -348,7 +348,7 @@ TEST(OrderBookTest, ExhaustPoolThrows) {
 TEST(OrderBookTest, AllocDeallocCycleStress) {
     OrderBook ob(10, 0, 1000);
     // Allocate and cancel 100 times with only 10 pool slots
-    for (uint64_t i = 1; i <= 100; ++i) {
+    for (OrderId i = 1; i <= 100; ++i) {
         std::vector<Trade> result_trades;
     ob.add_order(1, OrderType::Limit, 100, 10, Side::Sell, [&](const Trade& t) { result_trades.push_back(t); }); // Reuse ID 1
     
@@ -360,6 +360,7 @@ TEST(OrderBookTest, AllocDeallocCycleStress) {
 // MEMORY POOL DOUBLE-FREE DETECTION (Bug #2)
 // ============================================================
 
+#ifndef NDEBUG
 TEST(MemoryPoolTest, DoubleFreeThrows) {
     MemoryPool<Order> pool(10);
     Order* o = pool.allocate();
@@ -387,6 +388,14 @@ TEST(MemoryPoolTest, IsAllocatedTracking) {
     pool.deallocate(o);
     EXPECT_FALSE(pool.is_allocated(o));
 }
+#else
+TEST(MemoryPoolTest, DeallocDoesNotCrash) {
+    MemoryPool<Order> pool(10);
+    Order* o = pool.allocate();
+    pool.deallocate(o);
+    pool.deallocate(o); // Should NOT crash in release mode, although free list is corrupted
+}
+#endif
 
 // ============================================================
 // BOUNDS TESTS

@@ -6,6 +6,7 @@
 #include <vector>
 #include <bit>
 #include <algorithm>
+#include <cassert>
 
 namespace hft {
 
@@ -24,35 +25,28 @@ struct Trade {
     Quantity quantity;
 };
 
-#if !defined(NDEBUG) || !defined(__OPTIMIZE__)
-    #include <cassert>
-    #define HFT_ASSUME(cond) assert(cond)
-#else
-    #if defined(__clang__) || defined(__GNUC__)
-        #define HFT_ASSUME(cond) do { if (!(cond)) __builtin_unreachable(); } while (0)
-    #else
-        #define HFT_ASSUME(cond) do { } while (0)
-    #endif
-#endif
+#include "Macros.h"
 
 class OrderBook {
 public:
     explicit OrderBook(size_t max_orders, Price min_price, Price max_price);
 
     template <typename TradeCallback>
-    [[gnu::always_inline]] inline void add_order(OrderId id, OrderType type, Price price, Quantity quantity, Side side, TradeCallback&& on_trade);
+    HFT_FORCEINLINE void add_order(OrderId id, OrderType type, Price price, Quantity quantity, Side side, TradeCallback&& on_trade);
 
-    void cancel_order(OrderId id);
+    inline void cancel_order(OrderId id);
 
 private:
     template <Side side, typename TradeCallback>
-    [[gnu::always_inline]] inline void match_order(Order* taker_order, TradeCallback&& on_trade);
+    HFT_FORCEINLINE void match_order(Order* taker_order, TradeCallback&& on_trade);
 
-    void update_best_bid_after_remove(Price removed_price);
-    void update_best_ask_after_remove(Price removed_price);
+    HFT_FORCEINLINE void update_best_bid_after_remove(Price removed_price);
+    HFT_FORCEINLINE void update_best_ask_after_remove(Price removed_price);
     
     std::vector<uint64_t> bids_bitset_;
     std::vector<uint64_t> asks_bitset_;
+    std::vector<uint64_t> bids_summary_;
+    std::vector<uint64_t> asks_summary_;
 
     std::vector<PriceLevel> bids_levels_;
     std::vector<PriceLevel> asks_levels_;
@@ -73,7 +67,7 @@ private:
 // ====================================================================
 
 template <Side side, typename TradeCallback>
-[[gnu::always_inline]] inline void OrderBook::match_order(Order* taker_order, TradeCallback&& on_trade) {
+HFT_FORCEINLINE void OrderBook::match_order(Order* taker_order, TradeCallback&& on_trade) {
     if constexpr (side == Side::Buy) {
         // Cross against Asks (lowest to highest)
         while (best_ask_ <= max_price_ && taker_order->quantity > 0 && taker_order->price >= best_ask_) {
@@ -85,6 +79,7 @@ template <Side side, typename TradeCallback>
                 Order* maker_order = level.head;
                 while (maker_order != nullptr) {
                     Order* next_maker = maker_order->next;
+                    if (next_maker) HFT_PREFETCH(next_maker, 0, 3);
                     on_trade(Trade{maker_order->id, taker_order->id, maker_order->price, maker_order->quantity});
                     order_map_[maker_order->id] = nullptr;
                     order_pool_.deallocate(maker_order);
@@ -108,8 +103,9 @@ template <Side side, typename TradeCallback>
                     level.total_quantity -= trade_qty;
 
                     Order* next_maker = maker_order->next;
+                    if (next_maker) HFT_PREFETCH(next_maker, 0, 3);
 
-                    if (maker_order->quantity == 0) {
+                    if (maker_order->quantity == 0) [[likely]] {
                         // Unlink from list: we know prev was already handled
                         order_map_[maker_order->id] = nullptr;
                         order_pool_.deallocate(maker_order);
@@ -126,9 +122,12 @@ template <Side side, typename TradeCallback>
                 }
             }
 
-            if (level.is_empty()) {
+            if (HFT_UNLIKELY(level.is_empty())) {
                 size_t bit_idx = best_ask_ - min_price_;
                 asks_bitset_[bit_idx / 64] &= ~(1ULL << (bit_idx % 64));
+                if (asks_bitset_[bit_idx / 64] == 0) {
+                    asks_summary_[(bit_idx / 64) / 64] &= ~(1ULL << ((bit_idx / 64) % 64));
+                }
 
                 // Fast-forward best_ask_ using bitset
                 uint64_t word_idx = bit_idx / 64;
@@ -139,10 +138,20 @@ template <Side side, typename TradeCallback>
                     best_ask_ = min_price_ + word_idx * 64 + std::countr_zero(word);
                 } else {
                     best_ask_ = max_price_ + 1; // assume not found
-                    for (size_t i = word_idx + 1; i < asks_bitset_.size(); ++i) {
-                        if (asks_bitset_[i] != 0) {
-                            best_ask_ = min_price_ + i * 64 + std::countr_zero(asks_bitset_[i]);
-                            break;
+                    uint64_t summary_idx = word_idx / 64;
+                    uint64_t summary_mask = ~(((1ULL << (word_idx % 64)) << 1) - 1);
+                    uint64_t summary_word = asks_summary_[summary_idx] & summary_mask;
+                    
+                    if (summary_word != 0) {
+                        size_t next_word_idx = summary_idx * 64 + std::countr_zero(summary_word);
+                        best_ask_ = min_price_ + next_word_idx * 64 + std::countr_zero(asks_bitset_[next_word_idx]);
+                    } else {
+                        for (size_t i = summary_idx + 1; i < asks_summary_.size(); ++i) {
+                            if (asks_summary_[i] != 0) {
+                                size_t next_word_idx = i * 64 + std::countr_zero(asks_summary_[i]);
+                                best_ask_ = min_price_ + next_word_idx * 64 + std::countr_zero(asks_bitset_[next_word_idx]);
+                                break;
+                            }
                         }
                     }
                 }
@@ -159,6 +168,7 @@ template <Side side, typename TradeCallback>
                 Order* maker_order = level.head;
                 while (maker_order != nullptr) {
                     Order* next_maker = maker_order->next;
+                    if (next_maker) HFT_PREFETCH(next_maker, 0, 3);
                     on_trade(Trade{maker_order->id, taker_order->id, maker_order->price, maker_order->quantity});
                     order_map_[maker_order->id] = nullptr;
                     order_pool_.deallocate(maker_order);
@@ -182,8 +192,9 @@ template <Side side, typename TradeCallback>
                     level.total_quantity -= trade_qty;
 
                     Order* next_maker = maker_order->next;
+                    if (next_maker) HFT_PREFETCH(next_maker, 0, 3);
 
-                    if (maker_order->quantity == 0) {
+                    if (maker_order->quantity == 0) [[likely]] {
                         order_map_[maker_order->id] = nullptr;
                         order_pool_.deallocate(maker_order);
                         --level.order_count;
@@ -198,9 +209,12 @@ template <Side side, typename TradeCallback>
                 }
             }
 
-            if (level.is_empty()) {
+            if (HFT_UNLIKELY(level.is_empty())) {
                 size_t bit_idx = best_bid_ - min_price_;
                 bids_bitset_[bit_idx / 64] &= ~(1ULL << (bit_idx % 64));
+                if (bids_bitset_[bit_idx / 64] == 0) {
+                    bids_summary_[(bit_idx / 64) / 64] &= ~(1ULL << ((bit_idx / 64) % 64));
+                }
 
                 // Fast-forward best_bid_ using bitset (scan downwards)
                 uint64_t word_idx = bit_idx / 64;
@@ -212,11 +226,22 @@ template <Side side, typename TradeCallback>
                 } else {
                     has_bids_ = false;
                     best_bid_ = 0;
-                    for (int64_t i = word_idx - 1; i >= 0; --i) {
-                        if (bids_bitset_[i] != 0) {
-                            best_bid_ = min_price_ + i * 64 + 63 - std::countl_zero(bids_bitset_[i]);
-                            has_bids_ = true;
-                            break;
+                    uint64_t summary_idx = word_idx / 64;
+                    uint64_t summary_mask = (1ULL << (word_idx % 64)) - 1;
+                    uint64_t summary_word = bids_summary_[summary_idx] & summary_mask;
+                    
+                    if (summary_word != 0) {
+                        size_t next_word_idx = summary_idx * 64 + 63 - std::countl_zero(summary_word);
+                        best_bid_ = min_price_ + next_word_idx * 64 + 63 - std::countl_zero(bids_bitset_[next_word_idx]);
+                        has_bids_ = true;
+                    } else {
+                        for (int64_t i = summary_idx - 1; i >= 0; --i) {
+                            if (bids_summary_[i] != 0) {
+                                size_t next_word_idx = i * 64 + 63 - std::countl_zero(bids_summary_[i]);
+                                best_bid_ = min_price_ + next_word_idx * 64 + 63 - std::countl_zero(bids_bitset_[next_word_idx]);
+                                has_bids_ = true;
+                                break;
+                            }
                         }
                     }
                 }
@@ -225,25 +250,131 @@ template <Side side, typename TradeCallback>
     }
 }
 
+HFT_FORCEINLINE void OrderBook::update_best_ask_after_remove(Price removed_price) {
+    assert(best_ask_ == removed_price && "update_best_ask_after_remove must be called from the best ask level");
+    size_t bit_idx = removed_price - min_price_;
+    uint64_t word_idx = bit_idx / 64;
+    uint64_t mask = ~((1ULL << (bit_idx % 64)) - 1);
+    uint64_t word = asks_bitset_[word_idx] & mask;
+    
+    if (word != 0) {
+        best_ask_ = min_price_ + word_idx * 64 + std::countr_zero(word);
+        return;
+    }
+    
+    uint64_t summary_idx = word_idx / 64;
+    uint64_t summary_mask = ~(((1ULL << (word_idx % 64)) << 1) - 1);
+    uint64_t summary_word = asks_summary_[summary_idx] & summary_mask;
+    
+    if (summary_word != 0) {
+        size_t next_word_idx = summary_idx * 64 + std::countr_zero(summary_word);
+        best_ask_ = min_price_ + next_word_idx * 64 + std::countr_zero(asks_bitset_[next_word_idx]);
+        return;
+    }
+    
+    for (size_t i = summary_idx + 1; i < asks_summary_.size(); ++i) {
+        if (asks_summary_[i] != 0) {
+            size_t next_word_idx = i * 64 + std::countr_zero(asks_summary_[i]);
+            best_ask_ = min_price_ + next_word_idx * 64 + std::countr_zero(asks_bitset_[next_word_idx]);
+            return;
+        }
+    }
+    best_ask_ = max_price_ + 1;
+}
+
+HFT_FORCEINLINE void OrderBook::update_best_bid_after_remove(Price removed_price) {
+    assert(has_bids_ && best_bid_ == removed_price && "update_best_bid_after_remove must be called from the best bid level");
+    size_t bit_idx = removed_price - min_price_;
+    uint64_t word_idx = bit_idx / 64;
+    uint64_t mask = (1ULL << (bit_idx % 64)) - 1;
+    uint64_t word = bids_bitset_[word_idx] & mask;
+    
+    if (word != 0) {
+        best_bid_ = min_price_ + word_idx * 64 + 63 - std::countl_zero(word);
+        has_bids_ = true;
+        return;
+    }
+    
+    uint64_t summary_idx = word_idx / 64;
+    uint64_t summary_mask = (1ULL << (word_idx % 64)) - 1;
+    uint64_t summary_word = bids_summary_[summary_idx] & summary_mask;
+    
+    if (summary_word != 0) {
+        size_t next_word_idx = summary_idx * 64 + 63 - std::countl_zero(summary_word);
+        best_bid_ = min_price_ + next_word_idx * 64 + 63 - std::countl_zero(bids_bitset_[next_word_idx]);
+        return;
+    }
+    
+    for (int64_t i = summary_idx - 1; i >= 0; --i) {
+        if (bids_summary_[i] != 0) {
+            size_t next_word_idx = i * 64 + 63 - std::countl_zero(bids_summary_[i]);
+            best_bid_ = min_price_ + next_word_idx * 64 + 63 - std::countl_zero(bids_bitset_[next_word_idx]);
+            return;
+        }
+    }
+    has_bids_ = false;
+    best_bid_ = 0;
+}
+
+inline void OrderBook::cancel_order(OrderId id) {
+    if (HFT_UNLIKELY(id >= order_map_.size())) {
+        return;
+    }
+    if (HFT_UNLIKELY(order_map_[id] == nullptr)) {
+        return;
+    }
+    
+    Order* order = order_map_[id];
+    Price price = order->price;
+    size_t bit_idx = price - min_price_;
+    
+    if (order->side == Side::Buy) {
+        bids_levels_[bit_idx].remove_order(order);
+        if (HFT_UNLIKELY(bids_levels_[bit_idx].is_empty())) {
+            bids_bitset_[bit_idx / 64] &= ~(1ULL << (bit_idx % 64));
+            if (bids_bitset_[bit_idx / 64] == 0) {
+                bids_summary_[(bit_idx / 64) / 64] &= ~(1ULL << ((bit_idx / 64) % 64));
+            }
+            if (has_bids_ && best_bid_ == price) {
+                update_best_bid_after_remove(price);
+            }
+        }
+    } else {
+        asks_levels_[bit_idx].remove_order(order);
+        if (HFT_UNLIKELY(asks_levels_[bit_idx].is_empty())) {
+            asks_bitset_[bit_idx / 64] &= ~(1ULL << (bit_idx % 64));
+            if (asks_bitset_[bit_idx / 64] == 0) {
+                asks_summary_[(bit_idx / 64) / 64] &= ~(1ULL << ((bit_idx / 64) % 64));
+            }
+            if (best_ask_ == price) {
+                update_best_ask_after_remove(price);
+            }
+        }
+    }
+    
+    order_map_[id] = nullptr;
+    order_pool_.deallocate(order);
+}
+
 template <typename TradeCallback>
-[[gnu::always_inline]] inline void OrderBook::add_order(OrderId id, OrderType type, Price price, Quantity quantity, Side side, TradeCallback&& on_trade) {
-    if (type == OrderType::Cancel) {
+HFT_FORCEINLINE void OrderBook::add_order(OrderId id, OrderType type, Price price, Quantity quantity, Side side, TradeCallback&& on_trade) {
+    if (type == OrderType::Cancel) [[unlikely]] {
         cancel_order(id);
         return;
     }
 
-    if (quantity == 0) {
+    if (quantity == 0) [[unlikely]] {
         return;
     }
 
     const size_t map_size = order_map_.size();
-    if (id >= map_size) {
+    if (id >= map_size) [[unlikely]] {
         return;
     }
     
     HFT_ASSUME(id < map_size);
 
-    if (order_map_[id] != nullptr) {
+    if (order_map_[id] != nullptr) [[unlikely]] {
         return;
     }
 
@@ -280,6 +411,8 @@ template <typename TradeCallback>
             if (side == Side::Buy) {
                 bids_levels_[bit_idx].append_order(order);
                 bids_bitset_[bit_idx / 64] |= (1ULL << (bit_idx % 64));
+                bids_summary_[(bit_idx / 64) / 64] |= (1ULL << ((bit_idx / 64) % 64));
+                
                 if (!has_bids_ || order->price > best_bid_) {
                     best_bid_ = order->price;
                     has_bids_ = true;
@@ -287,6 +420,8 @@ template <typename TradeCallback>
             } else {
                 asks_levels_[bit_idx].append_order(order);
                 asks_bitset_[bit_idx / 64] |= (1ULL << (bit_idx % 64));
+                asks_summary_[(bit_idx / 64) / 64] |= (1ULL << ((bit_idx / 64) % 64));
+                
                 if (order->price < best_ask_) {
                     best_ask_ = order->price;
                 }

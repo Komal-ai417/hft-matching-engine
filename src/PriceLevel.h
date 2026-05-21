@@ -1,6 +1,7 @@
 #pragma once
 
 #include "Order.h"
+#include "Macros.h"
 
 namespace hft {
 
@@ -19,7 +20,7 @@ struct PriceLevel {
     explicit PriceLevel(Price p) noexcept : price(p) {}
 
     // Append an order to the end of the queue (Time priority)
-    [[gnu::always_inline]] inline void append_order(Order* order) noexcept {
+    HFT_FORCEINLINE void append_order(Order* order) noexcept {
         if (!head) {
             head = tail = order;
             order->prev = nullptr;
@@ -35,7 +36,7 @@ struct PriceLevel {
     }
 
     // Remove an order from this price level (e.g., cancellation or full fill)
-    [[gnu::always_inline]] inline void remove_order(Order* order) noexcept {
+    HFT_FORCEINLINE void remove_order(Order* order) noexcept {
         if (order->prev) {
             order->prev->next = order->next;
         } else {
