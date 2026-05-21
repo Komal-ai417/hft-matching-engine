@@ -23,60 +23,46 @@ OrderBook::OrderBook(size_t max_orders, Price min_price, Price max_price)
 }
 
 void OrderBook::update_best_ask_after_remove(Price removed_price) {
-    if (best_ask_ == removed_price && asks_levels_[removed_price - min_price_].is_empty()) {
-        size_t bit_idx = removed_price - min_price_;
-        asks_bitset_[bit_idx / 64] &= ~(1ULL << (bit_idx % 64));
-        
-        uint64_t word_idx = bit_idx / 64;
-        uint64_t mask = ~((1ULL << (bit_idx % 64)) - 1);
-        uint64_t word = asks_bitset_[word_idx] & mask;
-        
-        bool found = false;
-        if (word != 0) {
-            best_ask_ = min_price_ + word_idx * 64 + std::countr_zero(word);
-            found = true;
-        } else {
-            for (size_t i = word_idx + 1; i < asks_bitset_.size(); ++i) {
-                if (asks_bitset_[i] != 0) {
-                    best_ask_ = min_price_ + i * 64 + std::countr_zero(asks_bitset_[i]);
-                    found = true;
-                    break;
-                }
-            }
-        }
-        if (!found) {
-            best_ask_ = max_price_ + 1;
+    // Caller has already cleared the bitset bit and verified level is empty.
+    // Just scan forward for the next set bit.
+    size_t bit_idx = removed_price - min_price_;
+    uint64_t word_idx = bit_idx / 64;
+    uint64_t mask = ~((1ULL << (bit_idx % 64)) - 1);
+    uint64_t word = asks_bitset_[word_idx] & mask;
+    
+    if (word != 0) {
+        best_ask_ = min_price_ + word_idx * 64 + std::countr_zero(word);
+        return;
+    }
+    for (size_t i = word_idx + 1; i < asks_bitset_.size(); ++i) {
+        if (asks_bitset_[i] != 0) {
+            best_ask_ = min_price_ + i * 64 + std::countr_zero(asks_bitset_[i]);
+            return;
         }
     }
+    best_ask_ = max_price_ + 1; // Sentinel: no asks remain
 }
 
 void OrderBook::update_best_bid_after_remove(Price removed_price) {
-    if (has_bids_ && best_bid_ == removed_price && bids_levels_[removed_price - min_price_].is_empty()) {
-        size_t bit_idx = removed_price - min_price_;
-        bids_bitset_[bit_idx / 64] &= ~(1ULL << (bit_idx % 64));
-        
-        uint64_t word_idx = bit_idx / 64;
-        uint64_t mask = (1ULL << (bit_idx % 64)) - 1;
-        uint64_t word = bids_bitset_[word_idx] & mask;
-        
-        bool found = false;
-        if (word != 0) {
-            best_bid_ = min_price_ + word_idx * 64 + 63 - std::countl_zero(word);
-            found = true;
-        } else {
-            for (int64_t i = word_idx - 1; i >= 0; --i) {
-                if (bids_bitset_[i] != 0) {
-                    best_bid_ = min_price_ + i * 64 + 63 - std::countl_zero(bids_bitset_[i]);
-                    found = true;
-                    break;
-                }
-            }
-        }
-        if (!found) {
-            has_bids_ = false;
-            best_bid_ = 0;
+    // Caller has already cleared the bitset bit and verified level is empty.
+    // Just scan backward for the next set bit.
+    size_t bit_idx = removed_price - min_price_;
+    uint64_t word_idx = bit_idx / 64;
+    uint64_t mask = (1ULL << (bit_idx % 64)) - 1; // bits below current
+    uint64_t word = bids_bitset_[word_idx] & mask;
+    
+    if (word != 0) {
+        best_bid_ = min_price_ + word_idx * 64 + 63 - std::countl_zero(word);
+        return;
+    }
+    for (int64_t i = word_idx - 1; i >= 0; --i) {
+        if (bids_bitset_[i] != 0) {
+            best_bid_ = min_price_ + i * 64 + 63 - std::countl_zero(bids_bitset_[i]);
+            return;
         }
     }
+    has_bids_ = false;
+    best_bid_ = 0;
 }
 
 void OrderBook::cancel_order(OrderId id) {
@@ -89,13 +75,28 @@ void OrderBook::cancel_order(OrderId id) {
     
     Order* order = order_map_[id];
     Price price = order->price;
+    size_t bit_idx = price - min_price_;
     
     if (order->side == Side::Buy) {
-        bids_levels_[price - min_price_].remove_order(order);
-        update_best_bid_after_remove(price);
+        bids_levels_[bit_idx].remove_order(order);
+        // Always clear the bitset bit if the level is now empty
+        if (bids_levels_[bit_idx].is_empty()) {
+            bids_bitset_[bit_idx / 64] &= ~(1ULL << (bit_idx % 64));
+            // Only need to update best_bid if we just emptied the best level
+            if (has_bids_ && best_bid_ == price) {
+                update_best_bid_after_remove(price);
+            }
+        }
     } else {
-        asks_levels_[price - min_price_].remove_order(order);
-        update_best_ask_after_remove(price);
+        asks_levels_[bit_idx].remove_order(order);
+        // Always clear the bitset bit if the level is now empty
+        if (asks_levels_[bit_idx].is_empty()) {
+            asks_bitset_[bit_idx / 64] &= ~(1ULL << (bit_idx % 64));
+            // Only need to update best_ask if we just emptied the best level
+            if (best_ask_ == price) {
+                update_best_ask_after_remove(price);
+            }
+        }
     }
     
     order_map_[id] = nullptr;

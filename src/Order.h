@@ -42,7 +42,7 @@ enum class OrderType : uint8_t {
  * We align to 64 bytes to ensure an `Order` never strides two 64-byte 
  * CPU cache lines, preventing cache tearing on modern x86/ARM processors.
  */
-struct alignas(64) Order {
+struct Order {
     OrderId id;           // 8 bytes
     Price price;          // 8 bytes
     Quantity quantity;    // 4 bytes

@@ -106,7 +106,7 @@ private:
     std::vector<T> pool_;
     T* next_free_ = nullptr;
     size_t available_count_ = 0;
-    std::vector<bool> allocated_;        // Tracks which slots are in use
+    std::vector<uint8_t> allocated_;        // Tracks which slots are in use (byte per slot, avoids vector<bool> proxy overhead)
 };
 
 } // namespace hft

@@ -78,53 +78,73 @@ template <Side side, typename TradeCallback>
         // Cross against Asks (lowest to highest)
         while (best_ask_ <= max_price_ && taker_order->quantity > 0 && taker_order->price >= best_ask_) {
             PriceLevel& level = asks_levels_[best_ask_ - min_price_];
-            
-            Order* maker_order = level.head;
-            while (maker_order != nullptr && taker_order->quantity > 0) {
-                Quantity trade_qty = std::min(taker_order->quantity, maker_order->quantity);
-                Price trade_price = maker_order->price;
-                
-                on_trade(Trade{maker_order->id, taker_order->id, trade_price, trade_qty});
-                
-                taker_order->quantity -= trade_qty;
-                maker_order->quantity -= trade_qty;
-                level.total_quantity -= trade_qty;
-                
-                Order* next_maker = maker_order->next;
 
-                if (maker_order->quantity == 0) {
-                    level.remove_order(maker_order);
+            // ── Fast path: taker can consume the ENTIRE level ──
+            if (taker_order->quantity >= level.total_quantity) {
+                Quantity level_qty = level.total_quantity;
+                Order* maker_order = level.head;
+                while (maker_order != nullptr) {
+                    Order* next_maker = maker_order->next;
+                    on_trade(Trade{maker_order->id, taker_order->id, maker_order->price, maker_order->quantity});
                     order_map_[maker_order->id] = nullptr;
                     order_pool_.deallocate(maker_order);
+                    maker_order = next_maker;
                 }
-                maker_order = next_maker;
+                taker_order->quantity -= level_qty;
+                // Bulk-reset level (avoids N individual remove_order calls)
+                level.head = nullptr;
+                level.tail = nullptr;
+                level.total_quantity = 0;
+                level.order_count = 0;
+            } else {
+                // ── Slow path: partial fill within this level ──
+                Order* maker_order = level.head;
+                while (maker_order != nullptr && taker_order->quantity > 0) {
+                    Quantity trade_qty = std::min(taker_order->quantity, maker_order->quantity);
+                    on_trade(Trade{maker_order->id, taker_order->id, maker_order->price, trade_qty});
+
+                    taker_order->quantity -= trade_qty;
+                    maker_order->quantity -= trade_qty;
+                    level.total_quantity -= trade_qty;
+
+                    Order* next_maker = maker_order->next;
+
+                    if (maker_order->quantity == 0) {
+                        // Unlink from list: we know prev was already handled
+                        order_map_[maker_order->id] = nullptr;
+                        order_pool_.deallocate(maker_order);
+                        --level.order_count;
+                        // Fixup head — next_maker becomes the new head of remaining orders
+                        level.head = next_maker;
+                        if (next_maker) {
+                            next_maker->prev = nullptr;
+                        } else {
+                            level.tail = nullptr;
+                        }
+                    }
+                    maker_order = next_maker;
+                }
             }
 
             if (level.is_empty()) {
-                // Clear the bit
                 size_t bit_idx = best_ask_ - min_price_;
                 asks_bitset_[bit_idx / 64] &= ~(1ULL << (bit_idx % 64));
-                
+
                 // Fast-forward best_ask_ using bitset
                 uint64_t word_idx = bit_idx / 64;
                 uint64_t mask = ~((1ULL << (bit_idx % 64)) - 1);
                 uint64_t word = asks_bitset_[word_idx] & mask;
-                
-                bool found = false;
+
                 if (word != 0) {
                     best_ask_ = min_price_ + word_idx * 64 + std::countr_zero(word);
-                    found = true;
                 } else {
+                    best_ask_ = max_price_ + 1; // assume not found
                     for (size_t i = word_idx + 1; i < asks_bitset_.size(); ++i) {
                         if (asks_bitset_[i] != 0) {
                             best_ask_ = min_price_ + i * 64 + std::countr_zero(asks_bitset_[i]);
-                            found = true;
                             break;
                         }
                     }
-                }
-                if (!found) {
-                    best_ask_ = max_price_ + 1; // Sentinel
                 }
             }
         }
@@ -132,54 +152,73 @@ template <Side side, typename TradeCallback>
         // Cross against Bids (highest to lowest)
         while (has_bids_ && taker_order->quantity > 0 && taker_order->price <= best_bid_) {
             PriceLevel& level = bids_levels_[best_bid_ - min_price_];
-            
-            Order* maker_order = level.head;
-            while (maker_order != nullptr && taker_order->quantity > 0) {
-                Quantity trade_qty = std::min(taker_order->quantity, maker_order->quantity);
-                Price trade_price = maker_order->price;
-                
-                on_trade(Trade{maker_order->id, taker_order->id, trade_price, trade_qty});
-                
-                taker_order->quantity -= trade_qty;
-                maker_order->quantity -= trade_qty;
-                level.total_quantity -= trade_qty;
-                
-                Order* next_maker = maker_order->next;
 
-                if (maker_order->quantity == 0) {
-                    level.remove_order(maker_order);
+            // ── Fast path: taker can consume the ENTIRE level ──
+            if (taker_order->quantity >= level.total_quantity) {
+                Quantity level_qty = level.total_quantity;
+                Order* maker_order = level.head;
+                while (maker_order != nullptr) {
+                    Order* next_maker = maker_order->next;
+                    on_trade(Trade{maker_order->id, taker_order->id, maker_order->price, maker_order->quantity});
                     order_map_[maker_order->id] = nullptr;
                     order_pool_.deallocate(maker_order);
+                    maker_order = next_maker;
                 }
-                maker_order = next_maker;
+                taker_order->quantity -= level_qty;
+                // Bulk-reset level
+                level.head = nullptr;
+                level.tail = nullptr;
+                level.total_quantity = 0;
+                level.order_count = 0;
+            } else {
+                // ── Slow path: partial fill within this level ──
+                Order* maker_order = level.head;
+                while (maker_order != nullptr && taker_order->quantity > 0) {
+                    Quantity trade_qty = std::min(taker_order->quantity, maker_order->quantity);
+                    on_trade(Trade{maker_order->id, taker_order->id, maker_order->price, trade_qty});
+
+                    taker_order->quantity -= trade_qty;
+                    maker_order->quantity -= trade_qty;
+                    level.total_quantity -= trade_qty;
+
+                    Order* next_maker = maker_order->next;
+
+                    if (maker_order->quantity == 0) {
+                        order_map_[maker_order->id] = nullptr;
+                        order_pool_.deallocate(maker_order);
+                        --level.order_count;
+                        level.head = next_maker;
+                        if (next_maker) {
+                            next_maker->prev = nullptr;
+                        } else {
+                            level.tail = nullptr;
+                        }
+                    }
+                    maker_order = next_maker;
+                }
             }
 
             if (level.is_empty()) {
-                // Clear the bit
                 size_t bit_idx = best_bid_ - min_price_;
                 bids_bitset_[bit_idx / 64] &= ~(1ULL << (bit_idx % 64));
-                
+
                 // Fast-forward best_bid_ using bitset (scan downwards)
                 uint64_t word_idx = bit_idx / 64;
-                uint64_t mask = (1ULL << (bit_idx % 64)) - 1; // bits below current
+                uint64_t mask = (1ULL << (bit_idx % 64)) - 1;
                 uint64_t word = bids_bitset_[word_idx] & mask;
-                
-                bool found = false;
+
                 if (word != 0) {
                     best_bid_ = min_price_ + word_idx * 64 + 63 - std::countl_zero(word);
-                    found = true;
                 } else {
+                    has_bids_ = false;
+                    best_bid_ = 0;
                     for (int64_t i = word_idx - 1; i >= 0; --i) {
                         if (bids_bitset_[i] != 0) {
                             best_bid_ = min_price_ + i * 64 + 63 - std::countl_zero(bids_bitset_[i]);
-                            found = true;
+                            has_bids_ = true;
                             break;
                         }
                     }
-                }
-                if (!found) {
-                    has_bids_ = false;
-                    best_bid_ = 0;
                 }
             }
         }
