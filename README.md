@@ -13,33 +13,37 @@ The matching engine is built to maximize CPU cache hits and minimize operating s
 ```mermaid
 graph TD
     subgraph Client Space
-        A[Incoming FIX/ITCH Message]
+        A["Incoming FIX/ITCH Message"]
     end
 
     subgraph Order Book Engine
-        B[Network Ring Buffer / Lock-Free Queue]
-        C{Order Router}
+        B["Network Ring Buffer / Lock-Free Queue"]
+        C{"Order Router"}
         
         subgraph Memory Management
-            P[(Pre-Allocated MemoryPool)]
+            P[("Pre-Allocated MemoryPool")]
         end
         
         subgraph Data Structures
-            M[O1 Flat Array: OrderId -> Order*]
-            Tree[Flat Array: Price offset -> Bids]
-            Tree2[Flat Array: Price offset -> Asks]
+            M["O(1) Flat Array: OrderId -> Order*"]
+            Tree["Flat Array: Price offset -> Bids"]
+            Tree2["Flat Array: Price offset -> Asks"]
             
             subgraph Price Level
-                L[Intrusive Doubly-Linked List]
-                O1[Order 1] <--> O2[Order 2] <--> O3[Order n]
+                L["Intrusive Doubly-Linked List"]
+                O1["Order 1"]
+                O2["Order 2"]
+                O3["Order n"]
+                O1 <--> O2
+                O2 <--> O3
             end
         end
 
-        C --> |New Array Pointer| P
-        C --> |O1 Lookup/Cancel| M
-        C --> |Time Priority| L
-        C --> |Price Priority| Tree
-        C --> |Price Priority| Tree2
+        C --> |"New Array Pointer"| P
+        C --> |"O(1) Lookup/Cancel"| M
+        C --> |"Time Priority"| L
+        C --> |"Price Priority"| Tree
+        C --> |"Price Priority"| Tree2
         Tree --> L
         Tree2 --> L
     end
@@ -221,7 +225,7 @@ To achieve consistent hardware-sympathetic execution, the following techniques a
 
 ## Documentation
 
-Comprehensive technical documentation is available in the [`docs/`](docs/) directory:
+Comprehensive technical documentation is available in the [docs/](docs/) directory:
 
 | Document | Description |
 | :--- | :--- |

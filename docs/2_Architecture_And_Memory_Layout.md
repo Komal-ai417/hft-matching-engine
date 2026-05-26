@@ -27,12 +27,12 @@ To maintain Price-Time priority without dynamic memory churn, Orders represent n
 
 ```mermaid
 graph LR
-    subgraph PriceLevel [Price Level Array Slot]
-        H[Head Pointer]
-        T[Tail Pointer]
+    subgraph PriceLevel ["Price Level Array Slot"]
+        H["Head Pointer"]
+        T["Tail Pointer"]
     end
 
-    subgraph Memory Pool Data ["Pre-allocated Stack"]
+    subgraph MemoryPoolData ["Pre-allocated Stack"]
         O1["Order A"]
         O2["Order B"]
         O3["Order C"]
