@@ -139,28 +139,33 @@ HFT_FORCEINLINE void OrderBook::match_order_direct(OrderId taker_id, Price taker
                     asks_summary_[(bit_idx / 64) / 64] &= ~(1ULL << ((bit_idx / 64) % 64));
                 }
 
-                // Fast-forward best_ask_ using bitset
-                uint64_t word_idx = bit_idx / 64;
-                uint64_t mask = ~((1ULL << (bit_idx % 64)) - 1);
-                uint64_t word = asks_bitset_[word_idx] & mask;
-
-                if (word != 0) {
-                    best_ask_ = min_price_ + word_idx * 64 + std::countr_zero(word);
+                Price next_ask = best_ask_ + 1;
+                if (next_ask <= max_price_ && !asks_levels_[next_ask - min_price_].is_empty()) {
+                    best_ask_ = next_ask;
                 } else {
-                    best_ask_ = max_price_ + 1; // assume not found
-                    uint64_t summary_idx = word_idx / 64;
-                    uint64_t summary_mask = ~(((1ULL << (word_idx % 64)) << 1) - 1);
-                    uint64_t summary_word = asks_summary_[summary_idx] & summary_mask;
-                    
-                    if (summary_word != 0) {
-                        size_t next_word_idx = summary_idx * 64 + std::countr_zero(summary_word);
-                        best_ask_ = min_price_ + next_word_idx * 64 + std::countr_zero(asks_bitset_[next_word_idx]);
+                    // Fast-forward best_ask_ using bitset
+                    uint64_t word_idx = bit_idx / 64;
+                    uint64_t mask = ~((1ULL << (bit_idx % 64)) - 1);
+                    uint64_t word = asks_bitset_[word_idx] & mask;
+
+                    if (word != 0) {
+                        best_ask_ = min_price_ + word_idx * 64 + std::countr_zero(word);
                     } else {
-                        for (size_t i = summary_idx + 1; i < asks_summary_.size(); ++i) {
-                            if (asks_summary_[i] != 0) {
-                                size_t next_word_idx = i * 64 + std::countr_zero(asks_summary_[i]);
-                                best_ask_ = min_price_ + next_word_idx * 64 + std::countr_zero(asks_bitset_[next_word_idx]);
-                                break;
+                        best_ask_ = max_price_ + 1; // assume not found
+                        uint64_t summary_idx = word_idx / 64;
+                        uint64_t summary_mask = ~(((1ULL << (word_idx % 64)) << 1) - 1);
+                        uint64_t summary_word = asks_summary_[summary_idx] & summary_mask;
+                        
+                        if (summary_word != 0) {
+                            size_t next_word_idx = summary_idx * 64 + std::countr_zero(summary_word);
+                            best_ask_ = min_price_ + next_word_idx * 64 + std::countr_zero(asks_bitset_[next_word_idx]);
+                        } else {
+                            for (size_t i = summary_idx + 1; i < asks_summary_.size(); ++i) {
+                                if (asks_summary_[i] != 0) {
+                                    size_t next_word_idx = i * 64 + std::countr_zero(asks_summary_[i]);
+                                    best_ask_ = min_price_ + next_word_idx * 64 + std::countr_zero(asks_bitset_[next_word_idx]);
+                                    break;
+                                }
                             }
                         }
                     }
@@ -237,31 +242,35 @@ HFT_FORCEINLINE void OrderBook::match_order_direct(OrderId taker_id, Price taker
                     bids_summary_[(bit_idx / 64) / 64] &= ~(1ULL << ((bit_idx / 64) % 64));
                 }
 
-                // Fast-forward best_bid_ using bitset (scan downwards)
-                uint64_t word_idx = bit_idx / 64;
-                uint64_t mask = (1ULL << (bit_idx % 64)) - 1;
-                uint64_t word = bids_bitset_[word_idx] & mask;
-
-                if (word != 0) {
-                    best_bid_ = min_price_ + word_idx * 64 + 63 - std::countl_zero(word);
+                if (best_bid_ > min_price_ && !bids_levels_[best_bid_ - 1 - min_price_].is_empty()) {
+                    best_bid_--;
                 } else {
-                    has_bids_ = false;
-                    best_bid_ = 0;
-                    uint64_t summary_idx = word_idx / 64;
-                    uint64_t summary_mask = (1ULL << (word_idx % 64)) - 1;
-                    uint64_t summary_word = bids_summary_[summary_idx] & summary_mask;
-                    
-                    if (summary_word != 0) {
-                        size_t next_word_idx = summary_idx * 64 + 63 - std::countl_zero(summary_word);
-                        best_bid_ = min_price_ + next_word_idx * 64 + 63 - std::countl_zero(bids_bitset_[next_word_idx]);
-                        has_bids_ = true;
+                    // Fast-forward best_bid_ using bitset (scan downwards)
+                    uint64_t word_idx = bit_idx / 64;
+                    uint64_t mask = (1ULL << (bit_idx % 64)) - 1;
+                    uint64_t word = bids_bitset_[word_idx] & mask;
+
+                    if (word != 0) {
+                        best_bid_ = min_price_ + word_idx * 64 + 63 - std::countl_zero(word);
                     } else {
-                        for (int64_t i = summary_idx - 1; i >= 0; --i) {
-                            if (bids_summary_[i] != 0) {
-                                size_t next_word_idx = i * 64 + 63 - std::countl_zero(bids_summary_[i]);
-                                best_bid_ = min_price_ + next_word_idx * 64 + 63 - std::countl_zero(bids_bitset_[next_word_idx]);
-                                has_bids_ = true;
-                                break;
+                        has_bids_ = false;
+                        best_bid_ = 0;
+                        uint64_t summary_idx = word_idx / 64;
+                        uint64_t summary_mask = (1ULL << (word_idx % 64)) - 1;
+                        uint64_t summary_word = bids_summary_[summary_idx] & summary_mask;
+                        
+                        if (summary_word != 0) {
+                            size_t next_word_idx = summary_idx * 64 + 63 - std::countl_zero(summary_word);
+                            best_bid_ = min_price_ + next_word_idx * 64 + 63 - std::countl_zero(bids_bitset_[next_word_idx]);
+                            has_bids_ = true;
+                        } else {
+                            for (int64_t i = summary_idx - 1; i >= 0; --i) {
+                                if (bids_summary_[i] != 0) {
+                                    size_t next_word_idx = i * 64 + 63 - std::countl_zero(bids_summary_[i]);
+                                    best_bid_ = min_price_ + next_word_idx * 64 + 63 - std::countl_zero(bids_bitset_[next_word_idx]);
+                                    has_bids_ = true;
+                                    break;
+                                }
                             }
                         }
                     }
