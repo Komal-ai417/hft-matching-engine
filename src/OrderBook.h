@@ -77,9 +77,13 @@ HFT_FORCEINLINE void OrderBook::match_order(Order* taker_order, TradeCallback&& 
             if (taker_order->quantity >= level.total_quantity) {
                 Quantity level_qty = level.total_quantity;
                 Order* maker_order = level.head;
+                if (maker_order) HFT_PREFETCH(&order_map_[maker_order->id], 1, 3);
                 while (maker_order != nullptr) {
                     Order* next_maker = maker_order->next;
-                    if (next_maker) HFT_PREFETCH(next_maker, 0, 3);
+                    if (next_maker) {
+                        HFT_PREFETCH(next_maker, 0, 3);
+                        HFT_PREFETCH(&order_map_[next_maker->id], 1, 3);
+                    }
                     on_trade(Trade{maker_order->id, taker_order->id, maker_order->price, maker_order->quantity});
                     order_map_[maker_order->id] = nullptr;
                     order_pool_.deallocate(maker_order);
@@ -94,6 +98,7 @@ HFT_FORCEINLINE void OrderBook::match_order(Order* taker_order, TradeCallback&& 
             } else {
                 // ── Slow path: partial fill within this level ──
                 Order* maker_order = level.head;
+                if (maker_order) HFT_PREFETCH(&order_map_[maker_order->id], 1, 3);
                 while (maker_order != nullptr && taker_order->quantity > 0) {
                     Quantity trade_qty = std::min(taker_order->quantity, maker_order->quantity);
                     on_trade(Trade{maker_order->id, taker_order->id, maker_order->price, trade_qty});
@@ -103,7 +108,10 @@ HFT_FORCEINLINE void OrderBook::match_order(Order* taker_order, TradeCallback&& 
                     level.total_quantity -= trade_qty;
 
                     Order* next_maker = maker_order->next;
-                    if (next_maker) HFT_PREFETCH(next_maker, 0, 3);
+                    if (next_maker) {
+                        HFT_PREFETCH(next_maker, 0, 3);
+                        HFT_PREFETCH(&order_map_[next_maker->id], 1, 3);
+                    }
 
                     if (maker_order->quantity == 0) [[likely]] {
                         // Unlink from list: we know prev was already handled
@@ -166,9 +174,13 @@ HFT_FORCEINLINE void OrderBook::match_order(Order* taker_order, TradeCallback&& 
             if (taker_order->quantity >= level.total_quantity) {
                 Quantity level_qty = level.total_quantity;
                 Order* maker_order = level.head;
+                if (maker_order) HFT_PREFETCH(&order_map_[maker_order->id], 1, 3);
                 while (maker_order != nullptr) {
                     Order* next_maker = maker_order->next;
-                    if (next_maker) HFT_PREFETCH(next_maker, 0, 3);
+                    if (next_maker) {
+                        HFT_PREFETCH(next_maker, 0, 3);
+                        HFT_PREFETCH(&order_map_[next_maker->id], 1, 3);
+                    }
                     on_trade(Trade{maker_order->id, taker_order->id, maker_order->price, maker_order->quantity});
                     order_map_[maker_order->id] = nullptr;
                     order_pool_.deallocate(maker_order);
@@ -183,6 +195,7 @@ HFT_FORCEINLINE void OrderBook::match_order(Order* taker_order, TradeCallback&& 
             } else {
                 // ── Slow path: partial fill within this level ──
                 Order* maker_order = level.head;
+                if (maker_order) HFT_PREFETCH(&order_map_[maker_order->id], 1, 3);
                 while (maker_order != nullptr && taker_order->quantity > 0) {
                     Quantity trade_qty = std::min(taker_order->quantity, maker_order->quantity);
                     on_trade(Trade{maker_order->id, taker_order->id, maker_order->price, trade_qty});
@@ -192,7 +205,10 @@ HFT_FORCEINLINE void OrderBook::match_order(Order* taker_order, TradeCallback&& 
                     level.total_quantity -= trade_qty;
 
                     Order* next_maker = maker_order->next;
-                    if (next_maker) HFT_PREFETCH(next_maker, 0, 3);
+                    if (next_maker) {
+                        HFT_PREFETCH(next_maker, 0, 3);
+                        HFT_PREFETCH(&order_map_[next_maker->id], 1, 3);
+                    }
 
                     if (maker_order->quantity == 0) [[likely]] {
                         order_map_[maker_order->id] = nullptr;

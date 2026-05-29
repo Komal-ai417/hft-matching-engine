@@ -1,7 +1,6 @@
 #pragma once
 
 #include <cstdint>
-#include <iostream>
 #include <limits>
 
 namespace hft {
@@ -38,30 +37,19 @@ enum class OrderType : uint8_t {
  * list pointers (`next` and `prev`). This keeps the Order struct entirely
  * self-contained, allowing dense packing inside the `MemoryPool` and
  * massively improving L1/L2 cache hit rates during order traversal.
- * 
- * CACHE OPTIMIZATION: The struct is perfectly packed to exactly 32 bytes.
- * This guarantees that exactly two orders fit into a 64-byte CPU cache line
- * without any split-load overhead. Padding is minimized.
  */
 struct Order {
-    Order* next = nullptr;// 8 bytes
-    Order* prev = nullptr;// 8 bytes
-    
-    OrderId id;           // 4 bytes
-    Price price;          // 4 bytes
-    Quantity quantity;    // 4 bytes
-    Side side;            // 1 byte
-    // 3 bytes padding for 8-byte boundary alignment
+    Order* next = nullptr;
+    Order* prev = nullptr;
+    OrderId id;
+    Price price;
+    Quantity quantity;
+    Side side;
 
-
-    Order() noexcept : id(0), price(0), quantity(0), side(Side::Buy) {}
+    Order() noexcept = default;
     
     Order(OrderId id, Price price, Quantity quantity, Side side) noexcept
-        : id(id), price(price), quantity(quantity), side(side) {}
+        : next(nullptr), prev(nullptr), id(id), price(price), quantity(quantity), side(side) {}
 };
-
-inline std::ostream& operator<<(std::ostream& os, const Side& side) {
-    return os << (side == Side::Buy ? "Buy" : "Sell");
-}
 
 }// namespace hft

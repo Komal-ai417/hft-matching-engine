@@ -9,75 +9,86 @@
 #include <vector>
 #include <stdexcept>
 #include <cstring>
+#include <cstdint>
+#if defined(__linux__)
+#include <sys/mman.h>
+#elif defined(_WIN32)
+#include <windows.h>
+#endif
+#include "Macros.h"
 
 namespace hft {
 
 /**
  * @class MemoryPool
- * @brief A vector-backed memory pool designed for zero-allocation runtime.
+ * @brief An intrusive-free-list memory pool designed for zero-allocation runtime.
  * 
  * Works by pre-allocating a maximum capacity of objects (`T`). In an HFT environment,
  * you would set this capacity high enough (e.g., millions) so it never exhausts
- * during a single trading day. It maintains a stack (LIFO) of available indices
- * to hand out pointers on `allocate()` and reclaim them on `deallocate()`.
- * Allocation operations are O(1).
+ * during a single trading day. It maintains an intrusive singly-linked free-list
+ * embedded directly within unused pool slots, reusing the first pointer-sized
+ * field of each T object. Allocation and deallocation are strictly O(1).
  *
- * SAFETY: An allocation bitmap (`allocated_`) guards against double-free bugs,
- * which would otherwise cause two callers to receive the same memory address —
- * an extremely hard-to-debug corruption scenario.
+ * SAFETY: An allocation bitmap (`allocated_`) guards against double-free bugs
+ * in debug builds.
  */
 template <typename T>
 class MemoryPool {
 public:
-    explicit MemoryPool(size_t max_capacity) : capacity_(max_capacity), available_count_(max_capacity) {
+    explicit MemoryPool(size_t max_capacity) : capacity_(max_capacity) {
         pool_.resize(max_capacity);
 #if !defined(NDEBUG)
         allocated_.resize(max_capacity, false);
 #endif
         
-        // Link all blocks together via their internal 'next' pointers
-        for (size_t i = 0; i < max_capacity - 1; ++i) {
-            pool_[i].next = &pool_[i + 1];
+        // Build intrusive free-list through pool slots
+        // Each free slot's first pointer-sized bytes point to the next free slot
+        free_head_ = nullptr;
+        for (size_t i = max_capacity; i > 0; --i) {
+            T* slot = &pool_[i - 1];
+            *reinterpret_cast<T**>(slot) = free_head_;
+            free_head_ = slot;
         }
-        if (max_capacity > 0) {
-            pool_[max_capacity - 1].next = nullptr;
-            next_free_ = &pool_[0];
-        } else {
-            next_free_ = nullptr;
+
+        // Memory Pre-Touching: fault in all pages immediately
+        const size_t pool_bytes = max_capacity * sizeof(T);
+#if defined(__linux__)
+        madvise(pool_.data(), pool_bytes, MADV_POPULATE_READ);
+#elif defined(_WIN32)
+        // Lock pages into physical memory to prevent page faults
+        VirtualLock(pool_.data(), pool_bytes);
+#else
+        volatile char* p = reinterpret_cast<volatile char*>(pool_.data());
+        for (size_t offset = 0; offset < pool_bytes; offset += 4096) {
+            p[offset] = 0;
         }
+#endif
     }
 
-    // Allocate an object from the pool.
-    // Returns a pointer to pool memory. In debug builds, the memory is zeroed
-    // to catch stale-data bugs early.
-    T* allocate() {
-        if (!next_free_) {
-            throw std::bad_alloc(); // Pool is exhausted
+    // Allocate an object from the pool via intrusive free-list pop.
+    // O(1), no branching on the happy path.
+    HFT_FORCEINLINE T* allocate() noexcept {
+        if (HFT_UNLIKELY(free_head_ == nullptr)) {
+            return nullptr; // Pool exhausted — caller silently drops the order
         }
-        T* obj = next_free_;
-        next_free_ = obj->next; // Advance free list
+        
+        T* obj = free_head_;
+        free_head_ = *reinterpret_cast<T**>(obj);
         
 #if !defined(NDEBUG)
         size_t index = static_cast<size_t>(obj - pool_.data());
         allocated_[index] = true;
-#endif
-        --available_count_;
-
-#ifndef NDEBUG
         // Value-initialize to zero in debug builds to catch stale-data bugs.
-        // Using placement-new with value initialization instead of memset to avoid -Wclass-memaccess
         new (obj) T(); 
 #endif
 
         return obj;
     }
 
-    // Return an object to the pool.
-    // Guards against double-free: if the slot is not currently allocated,
-    // this is a logic error that would corrupt the free list.
-    void deallocate(T* ptr) {
-        // Calculate index based on pointer arithmetic
+    // Return an object to the pool via intrusive free-list push.
 #if !defined(NDEBUG)
+    // Debug deallocate: throws on invalid memory or double free
+    void deallocate(T* ptr) {
         size_t index = static_cast<size_t>(ptr - pool_.data());
         if (index >= capacity_) {
             throw std::out_of_range("Pointer does not belong to this memory pool.");
@@ -86,17 +97,18 @@ public:
             throw std::logic_error("Double free detected in MemoryPool!");
         }
         allocated_[index] = false;
-#endif
         
-        ptr->next = next_free_;
-        next_free_ = ptr;
-        ++available_count_;
+        *reinterpret_cast<T**>(ptr) = free_head_;
+        free_head_ = ptr;
     }
+#else
+    // Release deallocate: zero overhead, no branching, no exceptions
+    HFT_FORCEINLINE void deallocate(T* ptr) noexcept {
+        *reinterpret_cast<T**>(ptr) = free_head_;
+        free_head_ = ptr;
+    }
+#endif
 
-    size_t available() const noexcept {
-        return available_count_;
-    }
-    
     size_t capacity() const noexcept {
         return capacity_;
     }
@@ -114,10 +126,9 @@ public:
 private:
     size_t capacity_;
     std::vector<T> pool_;
-    T* next_free_ = nullptr;
-    size_t available_count_ = 0;
+    T* free_head_ = nullptr;
 #if !defined(NDEBUG)
-    std::vector<uint8_t> allocated_;        // Tracks which slots are in use (byte per slot, avoids vector<bool> proxy overhead)
+    std::vector<uint8_t> allocated_;
 #endif
 };
 

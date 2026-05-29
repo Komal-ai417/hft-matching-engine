@@ -8,10 +8,12 @@ set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 # ── Build-type-aware flags ──────────────────────────────────
 if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
     add_compile_options(-Wall -Wextra -Wpedantic)
-    # Release: full optimization (+ IPO if supported)
-    set(CMAKE_CXX_FLAGS_RELEASE "${CMAKE_CXX_FLAGS_RELEASE} -O3 -march=native")
+    # Release: maximum optimization for HFT-grade performance
+    set(CMAKE_CXX_FLAGS_RELEASE "${CMAKE_CXX_FLAGS_RELEASE} -O3 -march=native -fno-rtti -fno-exceptions -fmerge-all-constants -fno-math-errno -funroll-loops -falign-functions=32 -falign-loops=32 -ftree-vectorize")
     # Debug: sanitizers (optional) + debug symbols
     set(CMAKE_CXX_FLAGS_DEBUG "${CMAKE_CXX_FLAGS_DEBUG} -O0 -g -fno-omit-frame-pointer")
+    # RelWithDebInfo: used for profiling
+    set(CMAKE_CXX_FLAGS_RELWITHDEBINFO "${CMAKE_CXX_FLAGS_RELWITHDEBINFO} -O3 -march=native -fno-rtti -fno-exceptions -fmerge-all-constants -fno-math-errno -funroll-loops -falign-functions=32 -falign-loops=32 -g -fno-omit-frame-pointer")
     
     option(ENABLE_ASAN "Enable AddressSanitizer" ON)
     option(ENABLE_UBSAN "Enable UndefinedBehaviorSanitizer" ON)
@@ -25,7 +27,7 @@ if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
         set(CMAKE_EXE_LINKER_FLAGS_DEBUG "${CMAKE_EXE_LINKER_FLAGS_DEBUG} -fsanitize=undefined")
     endif()
 elseif(MSVC)
-    set(CMAKE_CXX_FLAGS_RELEASE "${CMAKE_CXX_FLAGS_RELEASE} /O2 /Oi /GL /arch:AVX2")
+    set(CMAKE_CXX_FLAGS_RELEASE "${CMAKE_CXX_FLAGS_RELEASE} /Ox /Oi /GL /arch:AVX2 /favor:INTEL64 /GS-")
     set(CMAKE_CXX_FLAGS_DEBUG "${CMAKE_CXX_FLAGS_DEBUG} /Od /Zi /fsanitize=address")
 endif()
 
@@ -53,13 +55,17 @@ set(BENCHMARK_ENABLE_WERROR OFF CACHE BOOL "" FORCE)
 FetchContent_MakeAvailable(googletest googlebenchmark)
 
 # ── Interprocedural Optimization (LTO) ──────────────────────
-include(CheckIPOSupported)
-check_ipo_supported(RESULT ipo_supported OUTPUT ipo_error)
-if(ipo_supported)
-    message(STATUS "IPO/LTO is supported and enabled.")
-    set_property(DIRECTORY PROPERTY INTERPROCEDURAL_OPTIMIZATION TRUE)
+if(NOT MINGW)
+    include(CheckIPOSupported)
+    check_ipo_supported(RESULT ipo_supported OUTPUT ipo_error)
+    if(ipo_supported)
+        message(STATUS "IPO/LTO is supported and enabled.")
+        set_property(DIRECTORY PROPERTY INTERPROCEDURAL_OPTIMIZATION TRUE)
+    else()
+        message(STATUS "IPO/LTO is not supported: ${ipo_error}")
+    endif()
 else()
-    message(STATUS "IPO/LTO is not supported: ${ipo_error}")
+    message(STATUS "IPO/LTO disabled on MINGW due to internal compiler issues.")
 endif()
 
 # ── Main Executable ────────────────────────────────────────
