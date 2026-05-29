@@ -1,4 +1,4 @@
-2026-05-29T22:58:20+05:30
+2026-05-29T23:00:58+05:30
 Running C:\Users\karya\Codes\hft-matching-engine\build\hft_bench.exe
 Run on (12 X 2611 MHz CPU s)
 CPU Caches:
@@ -6,24 +6,24 @@ CPU Caches:
   L1 Instruction 32 KiB (x6)
   L2 Unified 1280 KiB (x6)
   L3 Unified 12288 KiB (x1)
---------------------------------------------------------------------------------
-Benchmark                                      Time             CPU   Iterations
---------------------------------------------------------------------------------
-BM_AddOrder_NoMatch<OrderBook>              23.6 ns         23.6 ns    32000000
-BM_AddOrder_NoMatch<StdOrderBook>            373 ns          351 ns      4072727
-BM_Matching_DeepBook<OrderBook>              24.3 ns         23.6 ns    56000000
-BM_Matching_DeepBook<StdOrderBook>           497 ns          457 ns      3089655
-BM_BatchMatching<OrderBook>                  93.8 ns         93.8 ns     7466667
-BM_BatchMatching<StdOrderBook>              1993 ns         1880 ns       640000
-BM_AddAndCancel<OrderBook>                  17.1 ns         16.4 ns     93333333
-BM_AddAndCancel<StdOrderBook>                278 ns          265 ns      4480000
-BM_CancelInDeepBook<OrderBook>              12.4 ns         12.1 ns    56000000
-BM_CancelInDeepBook<StdOrderBook>            237 ns          209 ns      5973333
-BM_MarketOrder_DeepBook<OrderBook>           25.3 ns         24.9 ns    56000000
-BM_MarketOrder_DeepBook<StdOrderBook>        806 ns          746 ns      4715789
-BM_SweepMultipleLevels<OrderBook>            194 ns          191 ns     64000000
-BM_SweepMultipleLevels<StdOrderBook>        5414 ns         4938 ns       271515
-BM_WideSpreadMatching<OrderBook>             24.3 ns         23.6 ns    56000000
-BM_WideSpreadMatching<StdOrderBook>          681 ns          505 ns      4266667
-BM_MixedWorkload<OrderBook>                  14.6 ns         14.1 ns     93333333
-BM_MixedWorkload<StdOrderBook>               382 ns          357 ns      3835616
+-------------------------------------------------------------------------------------------------
+Benchmark                                                       Time             CPU   Iterations
+-------------------------------------------------------------------------------------------------
+BM_AddOrder_NoMatch<OrderBook>/iterations:1000000            7.09 ns        0.000 ns      1000000
+BM_AddOrder_NoMatch<StdOrderBook>/iterations:200000           307 ns          234 ns       200000
+BM_Matching_DeepBook<OrderBook>/iterations:100000            8.25 ns        0.000 ns       100000
+BM_Matching_DeepBook<StdOrderBook>/iterations:50000          80.2 ns        0.000 ns        50000
+BM_BatchMatching<OrderBook>/iterations:10000                  332 ns         1562 ns        10000
+BM_BatchMatching<StdOrderBook>/iterations:5000               1759 ns        0.000 ns         5000
+BM_AddAndCancel<OrderBook>/iterations:1000000                23.0 ns         31.2 ns      1000000
+BM_AddAndCancel<StdOrderBook>/iterations:200000               792 ns          781 ns       200000
+BM_CancelInDeepBook<OrderBook>/iterations:100000             7.48 ns        0.000 ns       100000
+BM_CancelInDeepBook<StdOrderBook>/iterations:50000            204 ns          312 ns        50000
+BM_MarketOrder_DeepBook<OrderBook>/iterations:100000         8.32 ns        0.000 ns       100000
+BM_MarketOrder_DeepBook<StdOrderBook>/iterations:50000        115 ns        0.000 ns        50000
+BM_SweepMultipleLevels<OrderBook>/iterations:5000             710 ns        0.000 ns         5000
+BM_SweepMultipleLevels<StdOrderBook>/iterations:2000         8236 ns         7812 ns         2000
+BM_WideSpreadMatching<OrderBook>/iterations:100000           12.4 ns        0.000 ns       100000
+BM_WideSpreadMatching<StdOrderBook>/iterations:50000          116 ns        0.000 ns        50000
+BM_MixedWorkload<OrderBook>/iterations:500000                13.3 ns        0.000 ns       500000
+BM_MixedWorkload<StdOrderBook>/iterations:100000              266 ns          312 ns       100000

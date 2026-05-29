@@ -18,8 +18,8 @@ static void BM_AddOrder_NoMatch(benchmark::State& state) {
         });
     }
 }
-BENCHMARK_TEMPLATE(BM_AddOrder_NoMatch, OrderBook);
-BENCHMARK_TEMPLATE(BM_AddOrder_NoMatch, StdOrderBook);
+BENCHMARK_TEMPLATE(BM_AddOrder_NoMatch, OrderBook)->Iterations(1000000);
+BENCHMARK_TEMPLATE(BM_AddOrder_NoMatch, StdOrderBook)->Iterations(200000);
 
 // ============================================================
 // 2. Single match against a deep book
@@ -45,8 +45,8 @@ static void BM_Matching_DeepBook(benchmark::State& state) {
         });
     }
 }
-BENCHMARK_TEMPLATE(BM_Matching_DeepBook, OrderBook);
-BENCHMARK_TEMPLATE(BM_Matching_DeepBook, StdOrderBook);
+BENCHMARK_TEMPLATE(BM_Matching_DeepBook, OrderBook)->Iterations(100000);
+BENCHMARK_TEMPLATE(BM_Matching_DeepBook, StdOrderBook)->Iterations(50000);
 
 // ============================================================
 // 3. Batch match — one aggressive buy fills 25 resting sells
@@ -73,8 +73,8 @@ static void BM_BatchMatching(benchmark::State& state) {
         });
     }
 }
-BENCHMARK_TEMPLATE(BM_BatchMatching, OrderBook);
-BENCHMARK_TEMPLATE(BM_BatchMatching, StdOrderBook);
+BENCHMARK_TEMPLATE(BM_BatchMatching, OrderBook)->Iterations(10000);
+BENCHMARK_TEMPLATE(BM_BatchMatching, StdOrderBook)->Iterations(5000);
 
 // ============================================================
 // 4. Add and immediate Cancel
@@ -92,8 +92,8 @@ static void BM_AddAndCancel(benchmark::State& state) {
         id++;
     }
 }
-BENCHMARK_TEMPLATE(BM_AddAndCancel, OrderBook);
-BENCHMARK_TEMPLATE(BM_AddAndCancel, StdOrderBook);
+BENCHMARK_TEMPLATE(BM_AddAndCancel, OrderBook)->Iterations(1000000);
+BENCHMARK_TEMPLATE(BM_AddAndCancel, StdOrderBook)->Iterations(200000);
 
 // ============================================================
 // 5. Cancel orders from a deep pre-populated book
@@ -116,8 +116,8 @@ static void BM_CancelInDeepBook(benchmark::State& state) {
         ob.cancel_order(cancel_id++);
     }
 }
-BENCHMARK_TEMPLATE(BM_CancelInDeepBook, OrderBook);
-BENCHMARK_TEMPLATE(BM_CancelInDeepBook, StdOrderBook);
+BENCHMARK_TEMPLATE(BM_CancelInDeepBook, OrderBook)->Iterations(100000);
+BENCHMARK_TEMPLATE(BM_CancelInDeepBook, StdOrderBook)->Iterations(50000);
 
 // ============================================================
 // 6. Market Order against deep book
@@ -138,8 +138,8 @@ static void BM_MarketOrder_DeepBook(benchmark::State& state) {
         });
     }
 }
-BENCHMARK_TEMPLATE(BM_MarketOrder_DeepBook, OrderBook);
-BENCHMARK_TEMPLATE(BM_MarketOrder_DeepBook, StdOrderBook);
+BENCHMARK_TEMPLATE(BM_MarketOrder_DeepBook, OrderBook)->Iterations(100000);
+BENCHMARK_TEMPLATE(BM_MarketOrder_DeepBook, StdOrderBook)->Iterations(50000);
 
 // ============================================================
 // 7. Sweep 50 price levels with one aggressive order
@@ -165,8 +165,8 @@ static void BM_SweepMultipleLevels(benchmark::State& state) {
         });
     }
 }
-BENCHMARK_TEMPLATE(BM_SweepMultipleLevels, OrderBook);
-BENCHMARK_TEMPLATE(BM_SweepMultipleLevels, StdOrderBook);
+BENCHMARK_TEMPLATE(BM_SweepMultipleLevels, OrderBook)->Iterations(5000);
+BENCHMARK_TEMPLATE(BM_SweepMultipleLevels, StdOrderBook)->Iterations(2000);
 
 // ============================================================
 // 8. Wide Spread Matching — orders across 10000+ levels
@@ -189,8 +189,8 @@ static void BM_WideSpreadMatching(benchmark::State& state) {
         });
     }
 }
-BENCHMARK_TEMPLATE(BM_WideSpreadMatching, OrderBook);
-BENCHMARK_TEMPLATE(BM_WideSpreadMatching, StdOrderBook);
+BENCHMARK_TEMPLATE(BM_WideSpreadMatching, OrderBook)->Iterations(100000);
+BENCHMARK_TEMPLATE(BM_WideSpreadMatching, StdOrderBook)->Iterations(50000);
 
 // ============================================================
 // 9. Mixed Workload — realistic 70/20/10 insert/match/cancel
@@ -220,7 +220,7 @@ static void BM_MixedWorkload(benchmark::State& state) {
         ++i;
     }
 }
-BENCHMARK_TEMPLATE(BM_MixedWorkload, OrderBook);
-BENCHMARK_TEMPLATE(BM_MixedWorkload, StdOrderBook);
+BENCHMARK_TEMPLATE(BM_MixedWorkload, OrderBook)->Iterations(500000);
+BENCHMARK_TEMPLATE(BM_MixedWorkload, StdOrderBook)->Iterations(100000);
 
 BENCHMARK_MAIN();
