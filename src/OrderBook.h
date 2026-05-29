@@ -38,7 +38,7 @@ public:
 
 private:
     template <Side side, typename TradeCallback>
-    HFT_FORCEINLINE void match_order(Order* taker_order, TradeCallback&& on_trade);
+    HFT_FORCEINLINE void match_order_direct(OrderId taker_id, Price taker_price, Quantity& taker_quantity, TradeCallback&& on_trade);
 
     HFT_FORCEINLINE void update_best_bid_after_remove(Price removed_price);
     HFT_FORCEINLINE void update_best_ask_after_remove(Price removed_price);
@@ -53,6 +53,7 @@ private:
     
     Price min_price_;
     Price max_price_;
+    size_t max_orders_;
     
     Price best_bid_;
     Price best_ask_;
@@ -67,14 +68,14 @@ private:
 // ====================================================================
 
 template <Side side, typename TradeCallback>
-HFT_FORCEINLINE void OrderBook::match_order(Order* taker_order, TradeCallback&& on_trade) {
+HFT_FORCEINLINE void OrderBook::match_order_direct(OrderId taker_id, Price taker_price, Quantity& taker_quantity, TradeCallback&& on_trade) {
     if constexpr (side == Side::Buy) {
         // Cross against Asks (lowest to highest)
-        while (best_ask_ <= max_price_ && taker_order->quantity > 0 && taker_order->price >= best_ask_) {
+        while (best_ask_ <= max_price_ && taker_quantity > 0 && taker_price >= best_ask_) {
             PriceLevel& level = asks_levels_[best_ask_ - min_price_];
 
             // ── Fast path: taker can consume the ENTIRE level ──
-            if (taker_order->quantity >= level.total_quantity) {
+            if (taker_quantity >= level.total_quantity) {
                 Quantity level_qty = level.total_quantity;
                 Order* maker_order = level.head;
                 if (maker_order) HFT_PREFETCH(&order_map_[maker_order->id], 1, 3);
@@ -84,12 +85,15 @@ HFT_FORCEINLINE void OrderBook::match_order(Order* taker_order, TradeCallback&& 
                         HFT_PREFETCH(next_maker, 0, 3);
                         HFT_PREFETCH(&order_map_[next_maker->id], 1, 3);
                     }
-                    on_trade(Trade{maker_order->id, taker_order->id, maker_order->price, maker_order->quantity});
+                    on_trade(Trade{maker_order->id, taker_id, maker_order->price, maker_order->quantity});
                     order_map_[maker_order->id] = nullptr;
-                    order_pool_.deallocate(maker_order);
                     maker_order = next_maker;
                 }
-                taker_order->quantity -= level_qty;
+                taker_quantity -= level_qty;
+                
+                // Bulk deallocate the level's orders!
+                order_pool_.deallocate_chain(level.head, level.tail);
+                
                 // Bulk-reset level (avoids N individual remove_order calls)
                 level.head = nullptr;
                 level.tail = nullptr;
@@ -99,11 +103,11 @@ HFT_FORCEINLINE void OrderBook::match_order(Order* taker_order, TradeCallback&& 
                 // ── Slow path: partial fill within this level ──
                 Order* maker_order = level.head;
                 if (maker_order) HFT_PREFETCH(&order_map_[maker_order->id], 1, 3);
-                while (maker_order != nullptr && taker_order->quantity > 0) {
-                    Quantity trade_qty = std::min(taker_order->quantity, maker_order->quantity);
-                    on_trade(Trade{maker_order->id, taker_order->id, maker_order->price, trade_qty});
+                while (maker_order != nullptr && taker_quantity > 0) {
+                    Quantity trade_qty = taker_quantity < maker_order->quantity ? taker_quantity : maker_order->quantity;
+                    on_trade(Trade{maker_order->id, taker_id, maker_order->price, trade_qty});
 
-                    taker_order->quantity -= trade_qty;
+                    taker_quantity -= trade_qty;
                     maker_order->quantity -= trade_qty;
                     level.total_quantity -= trade_qty;
 
@@ -114,11 +118,9 @@ HFT_FORCEINLINE void OrderBook::match_order(Order* taker_order, TradeCallback&& 
                     }
 
                     if (maker_order->quantity == 0) [[likely]] {
-                        // Unlink from list: we know prev was already handled
                         order_map_[maker_order->id] = nullptr;
                         order_pool_.deallocate(maker_order);
                         --level.order_count;
-                        // Fixup head — next_maker becomes the new head of remaining orders
                         level.head = next_maker;
                         if (next_maker) {
                             next_maker->prev = nullptr;
@@ -167,11 +169,11 @@ HFT_FORCEINLINE void OrderBook::match_order(Order* taker_order, TradeCallback&& 
         }
     } else {
         // Cross against Bids (highest to lowest)
-        while (has_bids_ && taker_order->quantity > 0 && taker_order->price <= best_bid_) {
+        while (has_bids_ && taker_quantity > 0 && taker_price <= best_bid_) {
             PriceLevel& level = bids_levels_[best_bid_ - min_price_];
 
             // ── Fast path: taker can consume the ENTIRE level ──
-            if (taker_order->quantity >= level.total_quantity) {
+            if (taker_quantity >= level.total_quantity) {
                 Quantity level_qty = level.total_quantity;
                 Order* maker_order = level.head;
                 if (maker_order) HFT_PREFETCH(&order_map_[maker_order->id], 1, 3);
@@ -181,12 +183,15 @@ HFT_FORCEINLINE void OrderBook::match_order(Order* taker_order, TradeCallback&& 
                         HFT_PREFETCH(next_maker, 0, 3);
                         HFT_PREFETCH(&order_map_[next_maker->id], 1, 3);
                     }
-                    on_trade(Trade{maker_order->id, taker_order->id, maker_order->price, maker_order->quantity});
+                    on_trade(Trade{maker_order->id, taker_id, maker_order->price, maker_order->quantity});
                     order_map_[maker_order->id] = nullptr;
-                    order_pool_.deallocate(maker_order);
                     maker_order = next_maker;
                 }
-                taker_order->quantity -= level_qty;
+                taker_quantity -= level_qty;
+                
+                // Bulk deallocate the level's orders!
+                order_pool_.deallocate_chain(level.head, level.tail);
+                
                 // Bulk-reset level
                 level.head = nullptr;
                 level.tail = nullptr;
@@ -196,11 +201,11 @@ HFT_FORCEINLINE void OrderBook::match_order(Order* taker_order, TradeCallback&& 
                 // ── Slow path: partial fill within this level ──
                 Order* maker_order = level.head;
                 if (maker_order) HFT_PREFETCH(&order_map_[maker_order->id], 1, 3);
-                while (maker_order != nullptr && taker_order->quantity > 0) {
-                    Quantity trade_qty = std::min(taker_order->quantity, maker_order->quantity);
-                    on_trade(Trade{maker_order->id, taker_order->id, maker_order->price, trade_qty});
+                while (maker_order != nullptr && taker_quantity > 0) {
+                    Quantity trade_qty = taker_quantity < maker_order->quantity ? taker_quantity : maker_order->quantity;
+                    on_trade(Trade{maker_order->id, taker_id, maker_order->price, trade_qty});
 
-                    taker_order->quantity -= trade_qty;
+                    taker_quantity -= trade_qty;
                     maker_order->quantity -= trade_qty;
                     level.total_quantity -= trade_qty;
 
@@ -333,7 +338,7 @@ HFT_FORCEINLINE void OrderBook::update_best_bid_after_remove(Price removed_price
 }
 
 inline void OrderBook::cancel_order(OrderId id) {
-    if (HFT_UNLIKELY(id >= order_map_.size())) {
+    if (HFT_UNLIKELY(id >= max_orders_)) {
         return;
     }
     if (HFT_UNLIKELY(order_map_[id] == nullptr)) {
@@ -383,12 +388,11 @@ HFT_FORCEINLINE void OrderBook::add_order(OrderId id, OrderType type, Price pric
         return;
     }
 
-    const size_t map_size = order_map_.size();
-    if (id >= map_size) [[unlikely]] {
+    if (id >= max_orders_) [[unlikely]] {
         return;
     }
     
-    HFT_ASSUME(id < map_size);
+    HFT_ASSUME(id < max_orders_);
 
     if (order_map_[id] != nullptr) [[unlikely]] {
         return;
@@ -402,26 +406,29 @@ HFT_FORCEINLINE void OrderBook::add_order(OrderId id, OrderType type, Price pric
 
     HFT_ASSUME(quantity > 0);
 
-    Order* order = order_pool_.allocate();
-    order->id = id;
-    order->price = type == OrderType::Market
+    Price resolved_price = type == OrderType::Market
                        ? (side == Side::Buy ? MARKET_BUY_PRICE : MARKET_SELL_PRICE)
                        : price;
-    order->quantity = quantity;
-    order->side = side;
-    order->next = nullptr;
-    order->prev = nullptr;
+    Quantity remaining_qty = quantity;
 
     if (side == Side::Buy) {
-        match_order<Side::Buy>(order, std::forward<TradeCallback>(on_trade));
+        match_order_direct<Side::Buy>(id, resolved_price, remaining_qty, std::forward<TradeCallback>(on_trade));
     } else {
-        match_order<Side::Sell>(order, std::forward<TradeCallback>(on_trade));
+        match_order_direct<Side::Sell>(id, resolved_price, remaining_qty, std::forward<TradeCallback>(on_trade));
     }
 
-    if (order->quantity > 0) {
+    if (remaining_qty > 0) {
         if (type == OrderType::Market) {
-            order_pool_.deallocate(order);
+            // Market order cannot be posted, so remaining is discarded
         } else {
+            Order* order = order_pool_.allocate();
+            order->id = id;
+            order->price = resolved_price;
+            order->quantity = remaining_qty;
+            order->side = side;
+            order->next = nullptr;
+            order->prev = nullptr;
+
             order_map_[id] = order;
             size_t bit_idx = order->price - min_price_;
             if (side == Side::Buy) {
@@ -443,8 +450,6 @@ HFT_FORCEINLINE void OrderBook::add_order(OrderId id, OrderType type, Price pric
                 }
             }
         }
-    } else {
-        order_pool_.deallocate(order);
     }
 
     return;

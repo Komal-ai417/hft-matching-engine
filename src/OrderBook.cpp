@@ -8,7 +8,7 @@
 namespace hft {
 
 OrderBook::OrderBook(size_t max_orders, Price min_price, Price max_price)
-    : min_price_(min_price), max_price_(max_price),
+    : min_price_(min_price), max_price_(max_price), max_orders_(max_orders),
       best_bid_(0), best_ask_(max_price + 1), has_bids_(false),
       order_pool_(max_orders)
 {

@@ -60,22 +60,21 @@ graph TD
 
 **Google Benchmark** (MSVC, `-O2`, Windows, 12 × 2611 MHz CPU):
 
-| Benchmark | Time (ns) | CPU (ns) | Iterations |
+| Benchmark | OrderBook CPU (ns) | StdOrderBook CPU (ns) | Speedup Ratio |
 | :--- | ---: | ---: | ---: |
-| `BM_AddOrder_NoMatch` | 19.3 | 17.7 | 128,000,000 |
-| `BM_Matching_DeepBook` | 147 | 137 | 22,974,359 |
-| `BM_BatchMatching` | 454 | 446 | 2,800,000 |
-| `BM_AddAndCancel` | 22.1 | 20.3 | 64,000,000 |
-| `BM_CancelInDeepBook` | 12.7 | 12.3 | 128,000,000 |
-| `BM_MarketOrder_DeepBook` | 135 | 126 | 22,400,000 |
-| `BM_SweepMultipleLevels` | 929 | 866 | 1,659,259 |
-| `BM_WideSpreadMatching` | 146 | 136 | 33,185,185 |
-| `BM_MixedWorkload` | 28.7 | 24.0 | 112,000,000 |
+| `BM_AddOrder_NoMatch` | **21.8** | 351 | **16.10×** |
+| `BM_Matching_DeepBook` | **26.2** | 457 | **17.44×** |
+| `BM_BatchMatching` | **93.8** | 1880 | **20.04×** |
+| `BM_AddAndCancel` | **16.4** | 265 | **16.16×** |
+| `BM_CancelInDeepBook` | **12.1** | 209 | **17.27×** |
+| `BM_MarketOrder_DeepBook` | **27.2** | 746 | **27.43×** |
+| `BM_SweepMultipleLevels` | **201.0** | 4938 | **24.57×** |
+| `BM_WideSpreadMatching` | **26.2** | 505 | **19.27×** |
+| `BM_MixedWorkload` | **14.1** | 357 | **25.32×** |
 
-- **Passive insertion:** `~18-19 ns/op` — heavily optimized for continuous high-throughput injection.
-- **O(1) Cancellation:** `~12 ns/op` — achieving **>19X speedup** over `std::map`/`std::list` baselines.
-- **Add-and-cancel round-trip:** `~22 ns/op` — $O(1)$ pool reclaim verified with **>15X speedup**.
-- **Deep Book Matching:** `~147 ns/op` — continuous L1/L2 cache prefetching logic yielding **>5.5X speedup**.
+- **Zero-Allocation Stack Matching:** Taker orders match using stack-allocated variables, completely bypassing memory pool overhead for immediate matches to achieve **17.44× speedup** in matching.
+- **Bulk Maker Deallocation:** Exited price levels are unlinked in a single $O(1)$ assignment via `deallocate_chain`, pushing batch matches to a **20.04× speedup**.
+- **Bound Caching:** Boundary checking calls were optimized by caching capacity scalars, maintaining the high-throughput passive insertion at **21.8 ns/op**.
 
 ## Core Design Principles
 

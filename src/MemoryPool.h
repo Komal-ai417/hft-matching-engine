@@ -109,6 +109,31 @@ public:
     }
 #endif
 
+#if !defined(NDEBUG)
+    void deallocate_chain(T* head, T* tail) {
+        T* cur = head;
+        while (cur != nullptr) {
+            size_t index = static_cast<size_t>(cur - pool_.data());
+            if (index >= capacity_) {
+                throw std::out_of_range("Pointer does not belong to this memory pool.");
+            }
+            if (!allocated_[index]) {
+                throw std::logic_error("Double free detected in MemoryPool!");
+            }
+            allocated_[index] = false;
+            if (cur == tail) break;
+            cur = cur->next;
+        }
+        *reinterpret_cast<T**>(tail) = free_head_;
+        free_head_ = head;
+    }
+#else
+    HFT_FORCEINLINE void deallocate_chain(T* head, T* tail) noexcept {
+        *reinterpret_cast<T**>(tail) = free_head_;
+        free_head_ = head;
+    }
+#endif
+
     size_t capacity() const noexcept {
         return capacity_;
     }

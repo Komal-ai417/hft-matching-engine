@@ -7,29 +7,32 @@ namespace hft {
 
 // Represents an aggregate of orders at a specific price point.
 // Contains an intrusive doubly-linked list of Orders to maintain Time priority.
-struct PriceLevel {
-    Price price = 0;
-    Quantity total_quantity = 0;
-    uint32_t order_count = 0;  // Track order count for faster empty-level detection
-    
-    // Head and tail of the intrusive linked list
-    Order* head = nullptr;
-    Order* tail = nullptr;
+//
+// CACHE OPTIMIZATION: alignas(32) ensures exactly two PriceLevel structs
+// fit inside a 64-byte L1 cache line without straddling. The price is
+// implicit from the vector index (price = min_price + index), so no
+// Price field is stored.
+struct alignas(32) PriceLevel {
+    // Head and tail of the intrusive linked list (pointers first for prefetch)
+    Order* head = nullptr;    // 8 bytes
+    Order* tail = nullptr;    // 8 bytes
+    Quantity total_quantity = 0; // 4 bytes
+    uint32_t order_count = 0;   // 4 bytes
+    // alignas(32) forces 8 bytes of implicit padding here
 
     PriceLevel() noexcept = default;
-    explicit PriceLevel(Price p) noexcept : price(p) {}
 
     // Append an order to the end of the queue (Time priority)
     HFT_FORCEINLINE void append_order(Order* order) noexcept {
-        if (!head) {
-            head = tail = order;
-            order->prev = nullptr;
-            order->next = nullptr;
-        } else {
+        if (HFT_LIKELY(head != nullptr)) [[likely]] {
             order->prev = tail;
             order->next = nullptr;
             tail->next = order;
             tail = order;
+        } else {
+            head = tail = order;
+            order->prev = nullptr;
+            order->next = nullptr;
         }
         total_quantity += order->quantity;
         ++order_count;
@@ -59,5 +62,7 @@ struct PriceLevel {
         return head == nullptr;
     }
 };
+
+static_assert(sizeof(PriceLevel) == 32, "PriceLevel struct must be exactly 32 bytes to fit two per 64-byte cache line.");
 
 } // namespace hft

@@ -332,17 +332,19 @@ TEST(OrderBookTest, MatchingOnEmptyBook) {
 // POOL BOUNDARY TESTS
 // ============================================================
 
-TEST(OrderBookTest, ExhaustPoolThrows) {
+TEST(OrderBookTest, ExhaustPoolSilentDrop) {
     OrderBook ob(3, 0, 1000);  // Only 3 slots
     ob.add_order(1, OrderType::Limit, 100, 10, Side::Sell, [](const Trade&){});
     ob.add_order(2, OrderType::Limit, 101, 10, Side::Sell, [](const Trade&){});
     ob.add_order(3, OrderType::Limit, 102, 10, Side::Sell, [](const Trade&){});
 
-    // Pool exhausted — next allocation with a valid ID should throw
-    EXPECT_THROW(
-        ob.add_order(0, OrderType::Limit, 103, 10, Side::Sell, [](const Trade&){}),
-        std::bad_alloc
-    );
+    // Pool exhausted — next allocation should be silently dropped (no exception)
+    ob.add_order(4, OrderType::Limit, 103, 10, Side::Sell, [](const Trade&){});
+
+    // Verify it doesn't exist in the book by sending a matching Buy order
+    std::vector<Trade> match_trades;
+    ob.add_order(5, OrderType::Limit, 103, 10, Side::Buy, [&](const Trade& t){ match_trades.push_back(t); });
+    EXPECT_TRUE(match_trades.empty());
 }
 
 TEST(OrderBookTest, AllocDeallocCycleStress) {
