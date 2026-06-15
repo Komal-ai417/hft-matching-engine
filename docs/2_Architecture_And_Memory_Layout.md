@@ -17,7 +17,7 @@ High-Frequency Trading matching engines cannot afford the unpredictability of ge
 
 ### Order Tracking: `unordered_map` vs. Flat Array
 
-**Rationale:** While `std::unordered_map` claims $O(1)$ amortized lookup, it uses separate chaining (linked lists) to resolve bucket collisions. This means dynamically allocating memory upon hash conflicts. Our engine replaces this with a simple `std::vector<Order*> order_map_`. A lookup is just a pointer read: `order_map_[order_id]`.
+**Rationale:** While `std::unordered_map` claims $O(1)$ amortized lookup, it uses separate chaining (linked lists) to resolve bucket collisions. This means dynamically allocating memory upon hash conflicts. Our engine replaces this with a simple `std::vector<uint32_t> order_map_`. A lookup is just an array read: `order_pool_.data()[order_map_[order_id]]`.
 
 ---
 
@@ -28,21 +28,21 @@ To maintain Price-Time priority without dynamic memory churn, Orders represent n
 ```mermaid
 graph LR
     subgraph PriceLevel ["Price Level Array Slot"]
-        H["Head Pointer"]
-        T["Tail Pointer"]
+        H["Head Index"]
+        T["Tail Index"]
     end
 
-    subgraph MemoryPoolData ["Pre-allocated Stack"]
-        O1["Order A"]
-        O2["Order B"]
-        O3["Order C"]
+    subgraph MemoryPoolData ["Pre-allocated Array"]
+        O1["Order A (idx: 0)"]
+        O2["Order B (idx: 1)"]
+        O3["Order C (idx: 2)"]
     end
 
     H --> O1
-    O1 -.->|next| O2
-    O2 -.->|next| O3
-    O3 -.->|prev| O2
-    O2 -.->|prev| O1
+    O1 -.->|next_idx| O2
+    O2 -.->|next_idx| O3
+    O3 -.->|prev_idx| O2
+    O2 -.->|prev_idx| O1
     T --> O3
     
     style PriceLevel fill:#4a148c,stroke:#ab47bc
@@ -51,7 +51,7 @@ graph LR
     style O3 fill:#1b5e20,stroke:#66bb6a
 ```
 
-When an order is cancelled, we grab the pointer from `order_map_` in $O(1)$, and immediately detach it from the list in $O(1)$ by connecting `order->prev->next` to `order->next->prev`.
+When an order is cancelled, we grab the index from `order_map_` in $O(1)$, and immediately detach it from the list in $O(1)$ by connecting `pool_data[order.prev].next` to `pool_data[order.next].prev`.
 
 ---
 
@@ -66,26 +66,26 @@ The `MemoryPool` pre-allocates an array of `N` `Order` structs inside a single c
 ```mermaid
 graph TD
     subgraph Initialization ["Boot Up"]
-        A["1. vector allocates N Order structs"] --> B["2. next_free_ points to pool 0"]
-        B --> C["3. pool 0 next points to pool 1"]
-        C --> D["4. pool 1 next points to pool 2"]
-        D --> E["5. ... until pool N-1 next = nullptr"]
+        A["1. vector allocates N Order structs"] --> B["2. next_free_ = 0"]
+        B --> C["3. pool 0 next = 1"]
+        C --> D["4. pool 1 next = 2"]
+        D --> E["5. ... until pool N-1 next = INVALID_INDEX"]
     end
 ```
 
 ### Allocation Flow ($O(1)$)
 When an order arrives, `engine` calls `pool.allocate()`:
-1. `obj = next_free_`
-2. `next_free_ = obj->next` (Advances stack)
-3. Allocation byte flips `allocated_[index] = 1`
-4. Returns `obj`.
+1. `idx = next_free_`
+2. `next_free_ = pool_data_[idx].next` (Advances stack)
+3. Allocation byte flips `allocated_[idx] = 1`
+4. Returns `idx`.
 
 ### Deallocation Flow & Double-Free Protection
 When an order executes or cancels:
-1. Engine calls `pool.deallocate(ptr)`
-2. Calculates index via pointer arithmetic: `ptr - pool.data()`
-3. Checks `allocated_[index]`. If `0`, it throws `std::logic_error("Double free detected")`. This is vital because double-frees corrupt the LIFO structure, causing two clients to own the same memory address.
-4. Flips `allocated_[index] = 0`.
-5. Pushes back to stack: `ptr->next = next_free_; next_free_ = ptr;`
+1. Engine calls `pool.deallocate(idx)`
+2. Checks bounds `idx < pool_data_.size()`.
+3. Checks `allocated_[idx]`. If `0`, it throws `std::logic_error("Double free detected")`. This is vital because double-frees corrupt the LIFO structure, causing two clients to own the same memory address.
+4. Flips `allocated_[idx] = 0`.
+5. Pushes back to stack: `pool_data_[idx].next = next_free_; next_free_ = idx;`
 
 This technique completely bypasses the OS `malloc`/`free` global locks, resolving all memory operations within CPU registers.

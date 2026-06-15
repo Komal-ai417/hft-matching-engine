@@ -25,20 +25,22 @@ struct StdOrder {
 
 class StdOrderBook {
 public:
-    explicit StdOrderBook(size_t /* max_orders */, Price /* min_price */, Price /* max_price */)
+    explicit StdOrderBook(size_t /* max_order_id */, size_t /* max_active_orders */, Price /* min_price */, Price /* max_price */)
         : next_timestamp_(0) {}
 
+    explicit StdOrderBook(size_t max_orders, Price min_price, Price max_price)
+        : StdOrderBook(max_orders, max_orders, min_price, max_price) {}
+
     template <typename TradeCallback>
-    void add_order(OrderId id, OrderType type, Price price, Quantity quantity, Side side, TradeCallback&& on_trade) {
+    [[nodiscard]] RejectReason add_order(OrderId id, OrderType type, Price price, Quantity quantity, Side side, TradeCallback&& on_trade) {
         if (type == OrderType::Cancel) {
-            cancel_order(id);
-            return;
+            return cancel_order(id);
         }
 
-        if (quantity == 0) return;
+        if (quantity == 0) return RejectReason::InvalidQuantity;
 
         // Hash table lookup for duplicate check (realistic)
-        if (order_map_.find(id) != order_map_.end()) return;
+        if (order_map_.find(id) != order_map_.end()) return RejectReason::DuplicateOrderId;
 
         StdOrder order{id, 
                        type == OrderType::Market ? (side == Side::Buy ? MARKET_BUY_PRICE : MARKET_SELL_PRICE) : price, 
@@ -115,18 +117,19 @@ public:
                 side_map_[id] = Side::Sell;
             }
         }
+        return RejectReason::Accepted;
     }
 
-    void cancel_order(OrderId id) {
+    [[nodiscard]] RejectReason cancel_order(OrderId id) {
         auto it = order_map_.find(id);  // Hash lookup
-        if (it == order_map_.end()) return;
+        if (it == order_map_.end()) return RejectReason::CancelFailed;
 
         auto list_it = it->second;
         Price price = list_it->price;
         
         // Need to look up side from separate map (realistic cost)
         auto side_it = side_map_.find(id);
-        if (side_it == side_map_.end()) return;
+        if (side_it == side_map_.end()) return RejectReason::CancelFailed;
         Side side = side_it->second;
 
         if (side == Side::Buy) {
@@ -144,6 +147,7 @@ public:
         }
         order_map_.erase(it);    // Hash erase
         side_map_.erase(id);     // Hash erase
+        return RejectReason::Accepted;
     }
 
 private:

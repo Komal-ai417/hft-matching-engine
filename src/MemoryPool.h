@@ -37,17 +37,17 @@ class MemoryPool {
 public:
     explicit MemoryPool(size_t max_capacity) : capacity_(max_capacity) {
         pool_.resize(max_capacity);
-#if !defined(NDEBUG)
+#if !defined(NDEBUG) || defined(HFT_AUDIT_MODE)
         allocated_.resize(max_capacity, false);
 #endif
         
         // Build intrusive free-list through pool slots
-        // Each free slot's first pointer-sized bytes point to the next free slot
-        free_head_ = nullptr;
+        // Each free slot's first 4 bytes (uint32_t) point to the next free slot index
+        free_head_ = INVALID_INDEX;
         for (size_t i = max_capacity; i > 0; --i) {
             T* slot = &pool_[i - 1];
-            *reinterpret_cast<T**>(slot) = free_head_;
-            free_head_ = slot;
+            *reinterpret_cast<uint32_t*>(slot) = free_head_;
+            free_head_ = static_cast<uint32_t>(i - 1);
         }
 
         // Memory Pre-Touching: fault in all pages immediately
@@ -67,69 +67,71 @@ public:
 
     // Allocate an object from the pool via intrusive free-list pop.
     // O(1), no branching on the happy path.
-    HFT_FORCEINLINE T* allocate() noexcept {
-        if (HFT_UNLIKELY(free_head_ == nullptr)) {
-            return nullptr; // Pool exhausted — caller silently drops the order
+    HFT_FORCEINLINE uint32_t allocate() noexcept {
+        if (HFT_UNLIKELY(free_head_ == INVALID_INDEX)) {
+            return INVALID_INDEX; // Pool exhausted — caller silently drops the order
         }
         
-        T* obj = free_head_;
-        free_head_ = *reinterpret_cast<T**>(obj);
+        uint32_t idx = free_head_;
+        T* obj = &pool_[idx];
+        free_head_ = *reinterpret_cast<uint32_t*>(obj);
         
-#if !defined(NDEBUG)
-        size_t index = static_cast<size_t>(obj - pool_.data());
-        allocated_[index] = true;
+#if !defined(NDEBUG) || defined(HFT_AUDIT_MODE)
+        allocated_[idx] = true;
         // Value-initialize to zero in debug builds to catch stale-data bugs.
         new (obj) T(); 
 #endif
 
-        return obj;
+        return idx;
     }
 
     // Return an object to the pool via intrusive free-list push.
-#if !defined(NDEBUG)
+#if !defined(NDEBUG) || defined(HFT_AUDIT_MODE)
     // Debug deallocate: throws on invalid memory or double free
-    void deallocate(T* ptr) {
-        size_t index = static_cast<size_t>(ptr - pool_.data());
+    void deallocate(uint32_t index) {
         if (index >= capacity_) {
-            throw std::out_of_range("Pointer does not belong to this memory pool.");
+            throw std::out_of_range("Index does not belong to this memory pool.");
         }
         if (!allocated_[index]) {
             throw std::logic_error("Double free detected in MemoryPool!");
         }
         allocated_[index] = false;
         
-        *reinterpret_cast<T**>(ptr) = free_head_;
-        free_head_ = ptr;
+        T* ptr = &pool_[index];
+        *reinterpret_cast<uint32_t*>(ptr) = free_head_;
+        free_head_ = index;
     }
 #else
     // Release deallocate: zero overhead, no branching, no exceptions
-    HFT_FORCEINLINE void deallocate(T* ptr) noexcept {
-        *reinterpret_cast<T**>(ptr) = free_head_;
-        free_head_ = ptr;
+    HFT_FORCEINLINE void deallocate(uint32_t index) noexcept {
+        T* ptr = &pool_[index];
+        *reinterpret_cast<uint32_t*>(ptr) = free_head_;
+        free_head_ = index;
     }
 #endif
 
-#if !defined(NDEBUG)
-    void deallocate_chain(T* head, T* tail) {
-        T* cur = head;
-        while (cur != nullptr) {
-            size_t index = static_cast<size_t>(cur - pool_.data());
-            if (index >= capacity_) {
-                throw std::out_of_range("Pointer does not belong to this memory pool.");
+#if !defined(NDEBUG) || defined(HFT_AUDIT_MODE)
+    void deallocate_chain(uint32_t head, uint32_t tail) {
+        uint32_t cur = head;
+        while (cur != INVALID_INDEX) {
+            if (cur >= capacity_) {
+                throw std::out_of_range("Index does not belong to this memory pool.");
             }
-            if (!allocated_[index]) {
+            if (!allocated_[cur]) {
                 throw std::logic_error("Double free detected in MemoryPool!");
             }
-            allocated_[index] = false;
+            allocated_[cur] = false;
             if (cur == tail) break;
-            cur = cur->next;
+            cur = pool_[cur].next;
         }
-        *reinterpret_cast<T**>(tail) = free_head_;
+        T* ptr = &pool_[tail];
+        *reinterpret_cast<uint32_t*>(ptr) = free_head_;
         free_head_ = head;
     }
 #else
-    HFT_FORCEINLINE void deallocate_chain(T* head, T* tail) noexcept {
-        *reinterpret_cast<T**>(tail) = free_head_;
+    HFT_FORCEINLINE void deallocate_chain(uint32_t head, uint32_t tail) noexcept {
+        T* ptr = &pool_[tail];
+        *reinterpret_cast<uint32_t*>(ptr) = free_head_;
         free_head_ = head;
     }
 #endif
@@ -138,10 +140,18 @@ public:
         return capacity_;
     }
 
-    /// Returns true if the given pointer is currently allocated from this pool.
-    bool is_allocated(const T* ptr) const noexcept {
-        size_t index = static_cast<size_t>(ptr - pool_.data());
-#if !defined(NDEBUG)
+    /// Access the underlying array directly
+    T* data() noexcept {
+        return pool_.data();
+    }
+    
+    const T* data() const noexcept {
+        return pool_.data();
+    }
+
+    /// Returns true if the given index is currently allocated from this pool.
+    bool is_allocated(uint32_t index) const noexcept {
+#if !defined(NDEBUG) || defined(HFT_AUDIT_MODE)
         return index < capacity_ && allocated_[index];
 #else
         return index < capacity_;
@@ -151,8 +161,8 @@ public:
 private:
     size_t capacity_;
     std::vector<T> pool_;
-    T* free_head_ = nullptr;
-#if !defined(NDEBUG)
+    uint32_t free_head_ = INVALID_INDEX;
+#if !defined(NDEBUG) || defined(HFT_AUDIT_MODE)
     std::vector<uint8_t> allocated_;
 #endif
 };

@@ -24,8 +24,8 @@ Defined in `Order.h`.
 
 | Alias | Underlying Type | Description |
 | :--- | :--- | :--- |
-| `OrderId` | `uint64_t` | Unique identifier for each order. Must be in range `[0, max_orders)`. |
-| `Price` | `uint64_t` | Fixed-point price representation (e.g., $1.50 → `15000`). Avoids floating-point indeterminism. |
+| `OrderId` | `uint32_t` | Unique identifier for each order. Must be in range `[1, max_order_id]`. |
+| `Price` | `uint32_t` | Fixed-point price representation (e.g., $1.50 → `15000`). Avoids floating-point indeterminism. |
 | `Quantity` | `uint32_t` | Order quantity. Must be `> 0` for Limit/Market orders. |
 
 ---
@@ -69,10 +69,11 @@ Defined in `OrderBook.h`. Retained for potential future use (e.g., restoring `st
 | Enumerator | Value | Trigger Condition |
 | :--- | :--- | :--- |
 | `InvalidQuantity` | `0` | `quantity == 0` for Limit or Market orders. |
-| `DuplicateOrderId` | `1` | `order_map_[id]` already contains an active pointer. |
-| `OutOfBoundsOrderId` | `2` | `id >= order_map_.size()`. |
+| `DuplicateOrderId` | `1` | `order_map_[id]` is not `INVALID_INDEX` (already contains an active index). |
+| `OutOfBoundsOrderId` | `2` | `id >= order_map_.size()` or `id == 0`. |
 | `OutOfBoundsPrice` | `3` | `price < min_price` or `price > max_price` for Limit orders. |
-| `CancelFailed` | `4` | `order_map_[id] == nullptr` (order does not exist or was already filled). |
+| `CancelFailed` | `4` | `order_map_[id] == INVALID_INDEX` (order does not exist or was already filled). |
+| `PoolExhausted` | `5` | Pool exhausted, order cannot be posted. |
 
 ---
 
@@ -80,29 +81,29 @@ Defined in `OrderBook.h`. Retained for potential future use (e.g., restoring `st
 
 ### `struct Order`
 
-Defined in `Order.h`. Represents a single order in the Limit Order Book. Uses natural 8-byte alignment (40 bytes total) for maximum cache density.
+Defined in `Order.h`. Represents a single order in the Limit Order Book. Kept incredibly lean at 24 bytes to allow tight cache packing.
 
 | Field | Type | Description |
 | :--- | :--- | :--- |
+| `next` | `uint32_t` | Index of the next order in the `PriceLevel` queue. |
+| `prev` | `uint32_t` | Index of the previous order in the `PriceLevel` queue. |
 | `id` | `OrderId` | Unique order identifier. |
 | `price` | `Price` | Order price (or sentinel for Market orders). |
 | `quantity` | `Quantity` | Remaining quantity (decremented during partial fills). |
 | `side` | `Side` | Buy or Sell. |
-| `next` | `Order*` | Intrusive linked-list pointer to the next order in the `PriceLevel` queue. |
-| `prev` | `Order*` | Intrusive linked-list pointer to the previous order in the `PriceLevel` queue. |
 
-**Memory Layout (40 bytes, natural 8-byte alignment):**
+**Memory Layout (24 bytes):**
 
 ```
 Offset  Field       Size
 ------  ----------  ----
-0x00    id          8 bytes
-0x08    price       8 bytes
+0x00    next        4 bytes
+0x04    prev        4 bytes
+0x08    id          4 bytes
+0x0C    price       4 bytes
 0x10    quantity    4 bytes
 0x14    side        1 byte
 0x15    (padding)   3 bytes
-0x18    next        8 bytes
-0x20    prev        8 bytes
 ```
 
 ### `struct Trade`
@@ -122,19 +123,20 @@ Defined in `PriceLevel.h`. An aggregate of all resting orders at a specific pric
 
 | Field | Type | Description |
 | :--- | :--- | :--- |
-| `price` | `Price` | The tick price this level represents. |
-| `total_quantity` | `Quantity` | Sum of all resting order quantities at this level. |
+| `total_quantity` | `uint64_t` | Sum of all resting order quantities at this level. |
 | `order_count` | `uint32_t` | Number of orders currently queued. |
-| `head` | `Order*` | Pointer to the oldest (first-in) order (front of the FIFO queue). |
-| `tail` | `Order*` | Pointer to the newest (last-in) order (back of the FIFO queue). |
+| `head` | `uint32_t` | Index of the oldest (first-in) order. |
+| `tail` | `uint32_t` | Index of the newest (last-in) order. |
+
+**Note:** The `price` is implicit from the level's index in the `bids_levels_` or `asks_levels_` vector.
 
 #### Methods
 
 | Signature | Complexity | Description |
 | :--- | :--- | :--- |
-| `void append_order(Order* order) noexcept` | $O(1)$ | Appends an order to the tail of the intrusive linked list. Marked `[[gnu::always_inline]]`. |
-| `void remove_order(Order* order) noexcept` | $O(1)$ | Detaches an order from the linked list by re-wiring `prev`/`next` pointers. Marked `[[gnu::always_inline]]`. |
-| `bool is_empty() const noexcept` | $O(1)$ | Returns `true` if `head == nullptr`. |
+| `void append_order(uint32_t order_idx, Order* pool_data)` | $O(1)$ | Appends an order to the tail of the intrusive linked list. |
+| `void remove_order(uint32_t order_idx, Order* pool_data)` | $O(1)$ | Detaches an order from the linked list by re-wiring `prev`/`next` indices. |
+| `bool is_empty() const noexcept` | $O(1)$ | Returns `true` if `head == INVALID_INDEX`. |
 
 ---
 
@@ -147,23 +149,23 @@ Defined in `OrderBook.h` and `OrderBook.cpp`. The core matching engine.
 #### Constructor
 
 ```cpp
-explicit OrderBook(size_t max_orders, Price min_price, Price max_price);
+explicit OrderBook(size_t max_order_id, size_t max_active_orders, Price min_price, Price max_price);
 ```
 
 | Parameter | Type | Description |
 | :--- | :--- | :--- |
-| `max_orders` | `size_t` | Maximum number of concurrent resting orders. Pre-allocates the `MemoryPool` and `order_map_`. |
+| `max_order_id` | `size_t` | Maximum order identifier limit (`id` must be in `[1, max_order_id]`). Pre-allocates `order_map_`. |
+| `max_active_orders`| `size_t` | Maximum number of concurrent resting orders. Pre-allocates the `MemoryPool`. |
 | `min_price` | `Price` | Minimum valid tick price (inclusive). |
 | `max_price` | `Price` | Maximum valid tick price (inclusive). |
 
-**Side Effects:** Allocates `(max_price - min_price + 1)` `PriceLevel` structs for both bids and asks. Initializes bitset arrays for hardware-accelerated price discovery.
+**Side Effects:** Allocates `(max_price - min_price + 1)` `PriceLevel` structs for both bids and asks. Initializes bitset arrays for hardware-accelerated price discovery. Validates `min_price <= max_price` (aborts/asserts if invalid).
 
 #### `add_order`
 
 ```cpp
 template <typename TradeCallback>
-[[gnu::always_inline]] inline
-void add_order(
+[[nodiscard]] HFT_FORCEINLINE RejectReason add_order(
     OrderId id,
     OrderType type,
     Price price,
@@ -177,23 +179,23 @@ void add_order(
 
 | Parameter | Type | Description |
 | :--- | :--- | :--- |
-| `id` | `OrderId` | Unique order ID. Must be `< max_orders`. |
+| `id` | `OrderId` | Unique order ID. Must be in range `[1, max_order_id]`. |
 | `type` | `OrderType` | `Limit`, `Market`, or `Cancel`. |
 | `price` | `Price` | The limit price. Ignored for `Market` and `Cancel` types. |
 | `quantity` | `Quantity` | Order size. Must be `> 0`. Ignored for `Cancel`. |
 | `side` | `Side` | `Buy` or `Sell`. For `Cancel`, this parameter is ignored. |
-| `on_trade` | `TradeCallback&&` | A callable with signature `void(const Trade&)`. Invoked synchronously for each fill. |
+| `on_trade` | `TradeCallback&&` | A callable with signature `void(const Trade&) noexcept`. Invoked synchronously for each fill. **WARNING:** This callback MUST NOT be re-entrant and MUST be marked `noexcept`. Throwing corrupts the order book state. |
 
-**Returns:** `void`
+**Returns:** `RejectReason`
 
-Invalid inputs (zero quantity, duplicate IDs, out-of-bounds prices/IDs) cause an immediate silent return with no side effects. This design avoids exception overhead on the hot-path.
+Invalid inputs (zero quantity, duplicate IDs, out-of-bounds prices/IDs) return the respective `RejectReason`. Success returns `RejectReason::Accepted`.
 
 **Example:**
 
 ```cpp
 ob.add_order(
     42, hft::OrderType::Limit, 10050, 100, hft::Side::Buy,
-    [](const hft::Trade& t) {
+    [](const hft::Trade& t) noexcept {
         std::cout << t.quantity << " filled @ " << t.price << "\n";
     }
 );
@@ -202,16 +204,16 @@ ob.add_order(
 #### `cancel_order`
 
 ```cpp
-void cancel_order(OrderId id);
+[[nodiscard]] inline RejectReason cancel_order(OrderId id);
 ```
 
 | Parameter | Type | Description |
 | :--- | :--- | :--- |
 | `id` | `OrderId` | The ID of the order to cancel. |
 
-**Returns:** `void`
+**Returns:** `RejectReason`
 
-If the `id` is out of bounds or no active order exists with this ID, the function returns silently with no side effects.
+If the `id` is out of bounds or no active order exists with this ID, the function returns `RejectReason::OutOfBoundsOrderId` or `RejectReason::CancelFailed` without side effects. Otherwise returns `RejectReason::Accepted`.
 
 **Complexity:** $O(1)$ — direct array lookup + intrusive list unlink.
 
@@ -236,34 +238,34 @@ explicit MemoryPool(size_t max_capacity);
 #### `allocate`
 
 ```cpp
-T* allocate();
+uint32_t allocate();
 ```
 
-Pops the top of the free-list stack and returns a pointer to the slot.
+Pops the top of the free-list stack and returns an index to the slot.
 
 | Return | Description |
 | :--- | :--- |
-| `T*` | Pointer to a pool-managed object. |
+| `uint32_t` | Index to a pool-managed object. `INVALID_INDEX` if exhausted. |
 
-**Throws:** `std::bad_alloc` if the pool is exhausted.
+**Throws:** Nothing. Returns `INVALID_INDEX` when out of memory, leading to silent drops rather than throwing.
 
 **Complexity:** $O(1)$.
 
 #### `deallocate`
 
 ```cpp
-void deallocate(T* ptr);
+void deallocate(uint32_t idx);
 ```
 
-Returns a previously allocated object back to the free-list.
+Returns a previously allocated object index back to the free-list.
 
 | Parameter | Type | Description |
 | :--- | :--- | :--- |
-| `ptr` | `T*` | Must be a pointer previously returned by `allocate()`. |
+| `idx` | `uint32_t` | Must be an index previously returned by `allocate()`. |
 
 **Throws:**
-- `std::out_of_range` if `ptr` does not belong to this pool (pointer arithmetic bounds check).
-- `std::logic_error` if the slot is already free (double-free detection via allocation byte-tracking vector).
+- `std::out_of_range` if `idx >= pool_data_.size()` (Debug or `HFT_AUDIT_MODE` only).
+- `std::logic_error` if the slot is already free (double-free detection via allocation byte-tracking vector, Debug or `HFT_AUDIT_MODE` only).
 
 **Complexity:** $O(1)$.
 
@@ -271,9 +273,9 @@ Returns a previously allocated object back to the free-list.
 
 | Signature | Returns | Description |
 | :--- | :--- | :--- |
-| `size_t available() const noexcept` | Number of free slots remaining. | |
 | `size_t capacity() const noexcept` | Total pool capacity. | |
-| `bool is_allocated(const T* ptr) const noexcept` | `true` if the pointer is currently marked as allocated. | |
+| `bool is_allocated(uint32_t idx) const noexcept` | `true` if the index is currently marked as allocated. | |
+| `T* data() noexcept` | Raw pointer to the underlying continuous memory array. | |
 
 ---
 
@@ -281,12 +283,12 @@ Returns a previously allocated object back to the free-list.
 
 ### `HFT_ASSUME(cond)`
 
-Defined in `OrderBook.h`. A safety-aware compiler optimization hint.
+Defined in `Macros.h`. A safety-aware compiler optimization hint.
 
 | Build Mode | Expansion | Behavior |
 | :--- | :--- | :--- |
-| **Debug** (`!NDEBUG` or `!__OPTIMIZE__`) | `assert(cond)` | Hard crash with diagnostic if `cond` is false. |
-| **Release** (`NDEBUG` + `__OPTIMIZE__`) | `[[assume(cond)]]` | C++23 attribute. Compiler eliminates dead code paths assuming `cond` is always true. Undefined Behavior if violated. |
+| **Debug** (`!NDEBUG`) | `assert(cond)` | Hard crash with diagnostic if `cond` is false. |
+| **Release** (`NDEBUG`) | `__builtin_unreachable()` / `__assume(cond)` | Compiler eliminates dead code paths assuming `cond` is always true. Undefined Behavior if violated. |
 
 **Usage in engine:**
 
@@ -294,6 +296,10 @@ Defined in `OrderBook.h`. A safety-aware compiler optimization hint.
 HFT_ASSUME(id < order_map_.size());   // Elides bounds-check assembly in Release
 HFT_ASSUME(quantity > 0);             // Elides zero-check assembly in Release
 ```
+
+### `HFT_AUDIT_MODE`
+
+A compile-time macro (`-DHFT_AUDIT_MODE`) that forces the `MemoryPool` allocation bitmap to remain active even in Release builds (`NDEBUG`). This provides $O(1)$ double-free and bounds-checking validation with minor memory and performance overhead, intended for shadow/staging environments.
 
 ---
 

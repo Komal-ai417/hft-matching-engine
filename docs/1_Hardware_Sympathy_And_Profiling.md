@@ -74,16 +74,16 @@ Instead of `std::map` or `std::unordered_map` (which allocate disjointed heap no
 Standard `std::list<Order>` requires an internal node pointer and heap allocations per insert. We solved this by defining our orders as intrusive:
 
 ```cpp
-struct Order {  // 40 bytes, natural 8-byte alignment
+struct Order {  // 24 bytes, tightly packed
+    uint32_t next; // Intrusive LIFO/FIFO links (indices instead of pointers)
+    uint32_t prev; 
     OrderId id;
     Price price;
     Quantity quantity;
     Side side;
-    Order* next; // Intrusive LIFO/FIFO links
-    Order* prev; 
 };
 ```
-The struct is kept at a lean 40 bytes with natural 8-byte alignment. Since the matching engine is single-threaded, cache-line alignment (`alignas(64)`) is intentionally avoided — it wastes 24 bytes of padding per order (37.5% overhead), reducing cache density with no benefit in a single-core context. The compact layout allows 1.6× more orders to fit per cache line.
+The struct is kept at a lean 24 bytes. Widening to `uint64_t` would break the two-per-cache-line packing; this is a deliberate trade-off, not an oversight. Since the matching engine is single-threaded, cache-line alignment (`alignas(64)`) is intentionally avoided — it wastes 40 bytes of padding per order, reducing cache density with no benefit in a single-core context. The compact layout allows ~2.6 orders to fit per 64-byte cache line.
 
 ---
 

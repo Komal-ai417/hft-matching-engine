@@ -13,6 +13,8 @@ using Quantity = uint32_t;
 constexpr Price MARKET_BUY_PRICE  = std::numeric_limits<Price>::max();
 constexpr Price MARKET_SELL_PRICE = 0;
 
+constexpr uint32_t INVALID_INDEX = UINT32_MAX;
+
 /**
  * @enum Side
  * @brief Represents the side of the trade (Buy or Sell).
@@ -39,8 +41,8 @@ enum class OrderType : uint8_t {
  * massively improving L1/L2 cache hit rates during order traversal.
  */
 struct Order {
-    Order* next = nullptr;
-    Order* prev = nullptr;
+    uint32_t next = INVALID_INDEX;
+    uint32_t prev = INVALID_INDEX;
     OrderId id;
     Price price;
     Quantity quantity;
@@ -49,7 +51,7 @@ struct Order {
     Order() noexcept = default;
     
     Order(OrderId id, Price price, Quantity quantity, Side side) noexcept
-        : next(nullptr), prev(nullptr), id(id), price(price), quantity(quantity), side(side) {}
+        : next(INVALID_INDEX), prev(INVALID_INDEX), id(id), price(price), quantity(quantity), side(side) {}
 };
 
 }// namespace hft

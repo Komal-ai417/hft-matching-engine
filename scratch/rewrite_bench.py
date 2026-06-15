@@ -1,4 +1,6 @@
-#include <benchmark/benchmark.h>
+import sys
+
+bench_content = """#include <benchmark/benchmark.h>
 #include "../src/OrderBook.h"
 #include "StdOrderBook.h"
 #include <memory>
@@ -21,7 +23,7 @@ static void BM_AddOrder_NoMatch(benchmark::State& state) {
             id = 1;
             state.ResumeTiming();
         }
-        (void)ob->add_order(id++, OrderType::Limit, 100, 10, Side::Sell, [](const Trade& t) noexcept {
+        ob->add_order(id++, OrderType::Limit, 100, 10, Side::Sell, [](const Trade& t){
             benchmark::DoNotOptimize(t);
         });
         orders_added++;
@@ -44,9 +46,9 @@ static void BM_Matching_DeepBook(benchmark::State& state) {
     OrderId id = 1;
     // Seed sells across 5000 price levels
     for (int64_t i = 0; i < seed; ++i) {
-        (void)ob.add_order(id++, OrderType::Limit,
+        ob.add_order(id++, OrderType::Limit,
                      10000 + static_cast<Price>(i % 5000), 10, Side::Sell,
-                     [](const Trade& t) noexcept { benchmark::DoNotOptimize(t); });
+                     [](const Trade& t){ benchmark::DoNotOptimize(t); });
     }
     uint64_t matches = 0;
     OrderId base_id = seed + 1;
@@ -55,8 +57,8 @@ static void BM_Matching_DeepBook(benchmark::State& state) {
         OrderId sell_id = base_id + (matches % 100000) * 2;
         OrderId buy_id = base_id + (matches % 100000) * 2 + 1;
         
-        (void)ob.add_order(sell_id, OrderType::Limit, 10000 + static_cast<Price>(matches % 5000), 10, Side::Sell, [](const Trade&) noexcept {});
-        (void)ob.add_order(buy_id, OrderType::Limit, 15000, 10, Side::Buy, [](const Trade& t) noexcept {
+        ob.add_order(sell_id, OrderType::Limit, 10000 + static_cast<Price>(matches % 5000), 10, Side::Sell, [](const Trade&){});
+        ob.add_order(buy_id, OrderType::Limit, 15000, 10, Side::Buy, [](const Trade& t){
             benchmark::DoNotOptimize(t);
         });
         matches++;
@@ -82,12 +84,12 @@ static void BM_BatchMatching(benchmark::State& state) {
     for (auto _ : state) {
         OrderId batch_base = base_id + (batches % 100000) * (BATCH + 1);
         for (int i = 0; i < BATCH; ++i) {
-            (void)ob.add_order(batch_base + i, OrderType::Limit, 100, 10, Side::Sell, [](const Trade& t) noexcept {
+            ob.add_order(batch_base + i, OrderType::Limit, 100, 10, Side::Sell, [](const Trade& t){
                 benchmark::DoNotOptimize(t);
             });
         }
         // One aggressive buy sweeps all resting sells
-        (void)ob.add_order(batch_base + BATCH, OrderType::Limit, 100, 10 * BATCH, Side::Buy, [](const Trade& t) noexcept {
+        ob.add_order(batch_base + BATCH, OrderType::Limit, 100, 10 * BATCH, Side::Buy, [](const Trade& t){
             benchmark::DoNotOptimize(t);
         });
         batches++;
@@ -109,10 +111,10 @@ static void BM_AddAndCancel(benchmark::State& state) {
     OrderId base_id = 1;
     for (auto _ : state) {
         OrderId id = base_id + (ops % 100000);
-        (void)ob.add_order(id, OrderType::Limit, 100, 10, Side::Sell, [](const Trade& t) noexcept {
+        ob.add_order(id, OrderType::Limit, 100, 10, Side::Sell, [](const Trade& t){
             benchmark::DoNotOptimize(t);
         });
-        (void)ob.cancel_order(id);
+        ob.cancel_order(id);
         ops++;
     }
     state.counters["cycles"] = benchmark::Counter(ops, benchmark::Counter::kIsRate);
@@ -131,16 +133,16 @@ static void BM_CancelInDeepBook(benchmark::State& state) {
     const int64_t count = 5000;
     BookType ob(10000000, 10000000, 0, 20000);
     for (int64_t i = 1; i <= count; ++i) {
-        (void)ob.add_order(static_cast<OrderId>(i), OrderType::Limit,
+        ob.add_order(static_cast<OrderId>(i), OrderType::Limit,
                      10000 + static_cast<Price>(i % 5000), 10, Side::Sell,
-                     [](const Trade& t) noexcept { benchmark::DoNotOptimize(t); });
+                     [](const Trade& t){ benchmark::DoNotOptimize(t); });
     }
     OrderId base_id = count + 1;
     uint64_t ops = 0;
     for (auto _ : state) {
         OrderId current_id = base_id + (ops % 100000);
-        (void)ob.add_order(current_id, OrderType::Limit, 10000 + static_cast<Price>(ops % 5000), 10, Side::Sell, [](const Trade&) noexcept {});
-        (void)ob.cancel_order(current_id);
+        ob.add_order(current_id, OrderType::Limit, 10000 + static_cast<Price>(ops % 5000), 10, Side::Sell, [](const Trade&){});
+        ob.cancel_order(current_id);
         ops++;
     }
     state.counters["ops"] = benchmark::Counter(ops * 2, benchmark::Counter::kIsRate);
@@ -157,17 +159,17 @@ static void BM_MarketOrder_DeepBook(benchmark::State& state) {
     BookType ob(10000000, 10000000, 0, 20000);
     OrderId id = 1;
     for (int64_t i = 0; i < seed; ++i) {
-        (void)ob.add_order(id++, OrderType::Limit,
+        ob.add_order(id++, OrderType::Limit,
                      10000 + static_cast<Price>(i % 5000), 10, Side::Sell,
-                     [](const Trade& t) noexcept { benchmark::DoNotOptimize(t); });
+                     [](const Trade& t){ benchmark::DoNotOptimize(t); });
     }
     uint64_t matches = 0;
     OrderId base_id = seed + 1;
     for (auto _ : state) {
         OrderId sell_id = base_id + (matches % 100000) * 2;
         OrderId buy_id = base_id + (matches % 100000) * 2 + 1;
-        (void)ob.add_order(sell_id, OrderType::Limit, 10000 + static_cast<Price>(matches % 5000), 10, Side::Sell, [](const Trade&) noexcept {});
-        (void)ob.add_order(buy_id, OrderType::Market, 0, 10, Side::Buy, [](const Trade& t) noexcept {
+        ob.add_order(sell_id, OrderType::Limit, 10000 + static_cast<Price>(matches % 5000), 10, Side::Sell, [](const Trade&){});
+        ob.add_order(buy_id, OrderType::Market, 0, 10, Side::Buy, [](const Trade& t){
             benchmark::DoNotOptimize(t);
         });
         matches++;
@@ -191,12 +193,12 @@ static void BM_SweepMultipleLevels(benchmark::State& state) {
     for (auto _ : state) {
         OrderId sweep_base = base_id + (sweeps % 10000) * (LEVELS + 1);
         for (int lvl = 0; lvl < LEVELS; ++lvl) {
-            (void)ob.add_order(sweep_base + lvl, OrderType::Limit, 100 + lvl, 10, Side::Sell, [](const Trade& t) noexcept {
+            ob.add_order(sweep_base + lvl, OrderType::Limit, 100 + lvl, 10, Side::Sell, [](const Trade& t){
                 benchmark::DoNotOptimize(t);
             });
         }
         // Sweep all levels
-        (void)ob.add_order(sweep_base + LEVELS, OrderType::Limit, 200, 10 * LEVELS, Side::Buy, [](const Trade& t) noexcept {
+        ob.add_order(sweep_base + LEVELS, OrderType::Limit, 200, 10 * LEVELS, Side::Buy, [](const Trade& t){
             benchmark::DoNotOptimize(t);
         });
         sweeps++;
@@ -217,17 +219,17 @@ static void BM_WideSpreadMatching(benchmark::State& state) {
     OrderId id = 1;
     // Seed sells across 10000 price levels
     for (int64_t i = 0; i < seed; ++i) {
-        (void)ob.add_order(id++, OrderType::Limit,
+        ob.add_order(id++, OrderType::Limit,
                      5000 + static_cast<Price>(i % 10000), 10, Side::Sell,
-                     [](const Trade& t) noexcept { benchmark::DoNotOptimize(t); });
+                     [](const Trade& t){ benchmark::DoNotOptimize(t); });
     }
     uint64_t matches = 0;
     OrderId base_id = seed + 1;
     for (auto _ : state) {
         OrderId sell_id = base_id + (matches % 100000) * 2;
         OrderId buy_id = base_id + (matches % 100000) * 2 + 1;
-        (void)ob.add_order(sell_id, OrderType::Limit, 5000 + static_cast<Price>(matches % 10000), 10, Side::Sell, [](const Trade&) noexcept {});
-        (void)ob.add_order(buy_id, OrderType::Limit, 15000, 10, Side::Buy, [](const Trade& t) noexcept {
+        ob.add_order(sell_id, OrderType::Limit, 5000 + static_cast<Price>(matches % 10000), 10, Side::Sell, [](const Trade&){});
+        ob.add_order(buy_id, OrderType::Limit, 15000, 10, Side::Buy, [](const Trade& t){
             benchmark::DoNotOptimize(t);
         });
         matches++;
@@ -249,18 +251,18 @@ static void BM_MixedWorkload(benchmark::State& state) {
         OrderId current_id = 1 + (i % 100000);
         if (op < 5) {
             // Insert passive
-            (void)ob.add_order(current_id, OrderType::Limit, 1000 + (i % 200), 10, Side::Sell, [](const Trade& t) noexcept {
+            ob.add_order(current_id, OrderType::Limit, 1000 + (i % 200), 10, Side::Sell, [](const Trade& t){
                 benchmark::DoNotOptimize(t);
             });
         } else if (op < 7) {
             // Aggressive match
-            (void)ob.add_order(current_id, OrderType::Limit, 1200, 10, Side::Buy, [](const Trade& t) noexcept {
+            ob.add_order(current_id, OrderType::Limit, 1200, 10, Side::Buy, [](const Trade& t){
                 benchmark::DoNotOptimize(t);
             });
         } else {
             // Cancel a recent order (ensure it's not the one we just added if we can help it, though it might be missing)
             OrderId cancel_id = 1 + ((i + 99995) % 100000);
-            (void)ob.cancel_order(cancel_id);
+            ob.cancel_order(cancel_id);
         }
         ++i;
     }
@@ -270,3 +272,7 @@ BENCHMARK_TEMPLATE(BM_MixedWorkload, OrderBook);
 BENCHMARK_TEMPLATE(BM_MixedWorkload, StdOrderBook);
 
 BENCHMARK_MAIN();
+"""
+
+with open("C:/Users/karya/Codes/hft-matching-engine/tests/benchmark_ob.cpp", "w") as f:
+    f.write(bench_content)

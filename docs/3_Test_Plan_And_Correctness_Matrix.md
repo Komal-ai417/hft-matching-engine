@@ -15,7 +15,7 @@ The core matching algorithm guarantees Price-Time priority.
 
 ## 2. Boundary & Invalid Inputs
 
-An HFT Gateway will occasionally feed malformed packets to the engine. The engine uses `std::expected<void, RejectReason>` to bounce these synchronously.
+An HFT Gateway will occasionally feed malformed packets to the engine. The engine uses a `[[nodiscard]] RejectReason` return type to bounce these synchronously.
 
 | Attack Vector | GTest Case Identifier | Handled State |
 | :--- | :--- | :--- |
@@ -32,7 +32,7 @@ Because the engine manages custom memory layouts, the CI pipeline integrates LLV
 ### Stress Testing
 
 - **`AllocDeallocCycleStress`**: Evaluates `MemoryPool` integrity by furiously inserting and cancelling $1,000,000+$ contiguous combinations, simulating violent market volatility. Asserts that internal available capacity correctly floats back to maximum exactly.
-- **`ExhaustPoolThrows`**: Evaluates exhaustion handling. Upon reaching maximum `1M` orders without frees, asserts that a controlled `std::bad_alloc` is emitted, catching runaway Gateway feeds.
+- **`ExhaustPoolSilentDrop`**: Evaluates exhaustion handling. Upon reaching maximum active orders, asserts that new orders are safely and silently dropped without exceptions (`-fno-exceptions` safe), catching runaway Gateway feeds.
 
 ### The `libc++` Mismatch Resolution
 

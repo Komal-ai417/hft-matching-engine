@@ -24,6 +24,10 @@
     #else
         #define HFT_ASSUME(cond) do { if (!(cond)) __builtin_unreachable(); } while (0)
     #endif
+    
+    // HFT_VERIFY: if condition fails, returns from enclosing function.
+    // Safe alternative to HFT_ASSUME for guarded paths — no UB on violation.
+    #define HFT_VERIFY(cond) do { if (!(cond)) [[unlikely]] return; } while(0)
 
 #elif defined(_MSC_VER)
     #define HFT_FORCEINLINE __forceinline
@@ -42,10 +46,13 @@
         #define HFT_ASSUME(cond) __assume(cond)
     #endif
 
+    #define HFT_VERIFY(cond) do { if (!(cond)) [[unlikely]] return; } while(0)
+
 #else
     #define HFT_FORCEINLINE inline
     #define HFT_LIKELY(x)   (x)
     #define HFT_UNLIKELY(x) (x)
     #define HFT_PREFETCH(addr, rw, locality) do {} while(0)
     #define HFT_ASSUME(cond) do {} while(0)
+    #define HFT_VERIFY(cond) do { if (!(cond)) [[unlikely]] return; } while(0)
 #endif

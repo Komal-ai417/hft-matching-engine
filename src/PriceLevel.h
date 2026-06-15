@@ -13,53 +13,55 @@ namespace hft {
 // implicit from the vector index (price = min_price + index), so no
 // Price field is stored.
 struct alignas(32) PriceLevel {
-    // Head and tail of the intrusive linked list (pointers first for prefetch)
-    Order* head = nullptr;    // 8 bytes
-    Order* tail = nullptr;    // 8 bytes
-    Quantity total_quantity = 0; // 4 bytes
-    uint32_t order_count = 0;   // 4 bytes
-    // alignas(32) forces 8 bytes of implicit padding here
+    // Head and tail of the intrusive linked list (indices into MemoryPool)
+    uint32_t head = INVALID_INDEX; // 4 bytes
+    uint32_t tail = INVALID_INDEX; // 4 bytes
+    uint64_t total_quantity = 0;   // 8 bytes
+    uint32_t order_count = 0;      // 4 bytes
+    // alignas(32) forces 12 bytes of implicit padding here
 
     PriceLevel() noexcept = default;
 
     // Append an order to the end of the queue (Time priority)
-    HFT_FORCEINLINE void append_order(Order* order) noexcept {
-        if (HFT_LIKELY(head != nullptr)) [[likely]] {
-            order->prev = tail;
-            order->next = nullptr;
-            tail->next = order;
-            tail = order;
+    HFT_FORCEINLINE void append_order(uint32_t order_idx, Order* pool_data) noexcept {
+        Order& order = pool_data[order_idx];
+        if (HFT_LIKELY(head != INVALID_INDEX)) [[likely]] {
+            order.prev = tail;
+            order.next = INVALID_INDEX;
+            pool_data[tail].next = order_idx;
+            tail = order_idx;
         } else {
-            head = tail = order;
-            order->prev = nullptr;
-            order->next = nullptr;
+            head = tail = order_idx;
+            order.prev = INVALID_INDEX;
+            order.next = INVALID_INDEX;
         }
-        total_quantity += order->quantity;
+        total_quantity += order.quantity;
         ++order_count;
     }
 
     // Remove an order from this price level (e.g., cancellation or full fill)
-    HFT_FORCEINLINE void remove_order(Order* order) noexcept {
-        if (order->prev) {
-            order->prev->next = order->next;
+    HFT_FORCEINLINE void remove_order(uint32_t order_idx, Order* pool_data) noexcept {
+        Order& order = pool_data[order_idx];
+        if (order.prev != INVALID_INDEX) {
+            pool_data[order.prev].next = order.next;
         } else {
-            head = order->next; // Order was head
+            head = order.next; // Order was head
         }
 
-        if (order->next) {
-            order->next->prev = order->prev;
+        if (order.next != INVALID_INDEX) {
+            pool_data[order.next].prev = order.prev;
         } else {
-            tail = order->prev; // Order was tail
+            tail = order.prev; // Order was tail
         }
 
-        order->prev = nullptr;
-        order->next = nullptr;
-        total_quantity -= order->quantity;
+        order.prev = INVALID_INDEX;
+        order.next = INVALID_INDEX;
+        total_quantity -= order.quantity;
         --order_count;
     }
 
     bool is_empty() const noexcept {
-        return head == nullptr;
+        return head == INVALID_INDEX;
     }
 };
 

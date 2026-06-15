@@ -27,8 +27,8 @@ int main() {
         constexpr uint64_t W = 100'000;
         hft::OrderBook warmup(W + 10, 0, 20000);
         for (uint64_t i = 1; i <= W; ++i) {
-            warmup.add_order(i, hft::OrderType::Limit, 1000 + (i % 1000), 10, hft::Side::Sell, [](const auto&) {});
-            warmup.add_order(i, hft::OrderType::Cancel, 0, 0, hft::Side::Buy, [](const auto&) {});
+            (void)warmup.add_order(i, hft::OrderType::Limit, 1000 + (i % 1000), 10, hft::Side::Sell, [](const auto&) noexcept {});
+            (void)warmup.add_order(i, hft::OrderType::Cancel, 0, 0, hft::Side::Buy, [](const auto&) noexcept {});
         }
         std::cout << "    Warmup complete.\n\n";
     }
@@ -44,7 +44,7 @@ int main() {
         auto start = std::chrono::high_resolution_clock::now();
 
         for (uint64_t i = 1; i <= N; ++i) {
-            ob.add_order(i, hft::OrderType::Limit, 1000 + (i % 1000), 10, hft::Side::Sell, [](const auto&){});
+            (void)ob.add_order(i, hft::OrderType::Limit, 1000 + (i % 1000), 10, hft::Side::Sell, [](const auto&) noexcept {});
         }
 
         auto end = std::chrono::high_resolution_clock::now();
@@ -64,7 +64,7 @@ int main() {
 
         // Seed the book
         for (uint64_t i = 1; i <= SEED; ++i) {
-            ob.add_order(i, hft::OrderType::Limit, 1000 + (i % 100), 10, hft::Side::Sell, [](const auto&){});
+            (void)ob.add_order(i, hft::OrderType::Limit, 1000 + (i % 100), 10, hft::Side::Sell, [](const auto&) noexcept {});
         }
 
         std::cout << "[2] Pure Matching: " << MATCH << " aggressive buy orders against " << SEED << " resting sells...\n";
@@ -72,7 +72,7 @@ int main() {
 
         uint64_t start_id = SEED + 1;
         for (uint64_t i = 0; i < MATCH; ++i) {
-            ob.add_order(start_id + i, hft::OrderType::Limit, 1100, 10, hft::Side::Buy, [](const auto&){});
+            (void)ob.add_order(start_id + i, hft::OrderType::Limit, 1100, 10, hft::Side::Buy, [](const auto&) noexcept {});
         }
 
         auto end = std::chrono::high_resolution_clock::now();
@@ -91,14 +91,14 @@ int main() {
 
         // Seed
         for (uint64_t i = 1; i <= N; ++i) {
-            ob.add_order(i, hft::OrderType::Limit, 1000 + (i % 500), 10, hft::Side::Sell, [](const auto&){});
+            (void)ob.add_order(i, hft::OrderType::Limit, 1000 + (i % 500), 10, hft::Side::Sell, [](const auto&) noexcept {});
         }
 
         std::cout << "[3] Pure Cancellation: " << N << " cancel operations...\n";
         auto start = std::chrono::high_resolution_clock::now();
 
         for (uint64_t i = 1; i <= N; ++i) {
-            ob.add_order(i, hft::OrderType::Cancel, 0, 0, hft::Side::Buy, [](const auto&){});
+            (void)ob.add_order(i, hft::OrderType::Cancel, 0, 0, hft::Side::Buy, [](const auto&) noexcept {});
         }
 
         auto end = std::chrono::high_resolution_clock::now();
@@ -123,14 +123,14 @@ int main() {
             uint64_t op = i % 10;
             if (op < 7) {
                 // Insert passive
-                ob.add_order(id++, hft::OrderType::Limit, 1000 + (i % 200), 10, hft::Side::Sell, [](const auto&){});
+                (void)ob.add_order(id++, hft::OrderType::Limit, 1000 + (i % 200), 10, hft::Side::Sell, [](const auto&) noexcept {});
             } else if (op < 9) {
                 // Aggressive match
-                ob.add_order(id++, hft::OrderType::Limit, 1200, 10, hft::Side::Buy, [](const auto&){});
+                (void)ob.add_order(id++, hft::OrderType::Limit, 1200, 10, hft::Side::Buy, [](const auto&) noexcept {});
             } else {
                 // Cancel a recent order
                 uint64_t cancel_id = (id > 5) ? id - 5 : 1;
-                ob.add_order(cancel_id, hft::OrderType::Cancel, 0, 0, hft::Side::Buy, [](const auto&){});
+                (void)ob.add_order(cancel_id, hft::OrderType::Cancel, 0, 0, hft::Side::Buy, [](const auto&) noexcept {});
             }
         }
 
