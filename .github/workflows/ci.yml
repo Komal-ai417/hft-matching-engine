@@ -42,7 +42,7 @@ jobs:
     - name: Build
       run: cmake --build ${{github.workspace}}/build --config ${{ matrix.build_type }} -j$(nproc)
 
-    - name: Test (ctest — audit M-6: ctest wiring)
+    - name: "Test (ctest — audit M-6: ctest wiring)"
       working-directory: ${{github.workspace}}/build
       run: ctest --output-on-failure
 
