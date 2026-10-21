@@ -38,19 +38,19 @@
 namespace {
 
 // ── Demo workload tuning — every number is named (zero-magic-number policy) ──
-constexpr std::uint64_t kWarmupOps = 100'000;         // I-cache/branch warmup
-constexpr std::uint64_t kInsertOps = 1'000'000;       // benchmark 1
-constexpr std::uint64_t kMatchSeedOrders = 100'000;   // benchmark 2 resting
-constexpr std::uint64_t kMatchTakerOrders = 100'000;  // benchmark 2 aggressive
-constexpr std::uint64_t kCancelOps = 500'000;         // benchmark 3
-constexpr std::uint64_t kMixedOps = 1'000'000;        // benchmark 4
-constexpr std::uint64_t kIdHeadroom = 10;             // pool headroom past the op count
-constexpr std::uint64_t kMixCycleLen = 10;            // op-mix period
-constexpr std::uint64_t kMixInsertCutoff = 7;         // op < 7  -> insert
-constexpr std::uint64_t kMixMatchCutoff = 9;          // op < 9  -> match
-constexpr std::uint64_t kMixCancelLookback = 5;       // cancel a recent id
-constexpr double kNanosPerMicro = 1000.0;             // us -> ns scale
-constexpr std::size_t kProbePageBytes = 4096;         // locked-alloc probe page
+constexpr std::uint64_t kWarmupOps = 100'000;          // I-cache/branch warmup
+constexpr std::uint64_t kInsertOps = 1'000'000;        // benchmark 1
+constexpr std::uint64_t kMatchSeedOrders = 100'000;    // benchmark 2 resting
+constexpr std::uint64_t kMatchTakerOrders = 100'000;   // benchmark 2 aggressive
+constexpr std::uint64_t kCancelOps = 500'000;          // benchmark 3
+constexpr std::uint64_t kMixedOps = 1'000'000;         // benchmark 4
+constexpr std::uint64_t kIdHeadroom = 10;              // pool headroom past the op count
+constexpr std::uint64_t kMixCycleLen = 10;             // op-mix period
+constexpr std::uint64_t kMixInsertCutoff = 7;          // op < 7  -> insert
+constexpr std::uint64_t kMixMatchCutoff = 9;           // op < 9  -> match
+constexpr std::uint64_t kMixCancelLookback = 5;        // cancel a recent id
+constexpr double kNanosPerMicro = 1000.0;              // us -> ns scale
+constexpr std::size_t kProbeBytes = 64 * 1024 * 1024;  // 64 MiB probe allocation (matching pool size)
 
 constexpr hft::Price kWarmupMaxPrice = 20'000;  // wide warmup book
 constexpr hft::Price kMaxBookPrice = 2000;      // benchmarks 1-4
@@ -66,22 +66,23 @@ constexpr hft::Quantity kDemoQty = 10;          // every demo order's size
 /// Outcome of the startup memory-lock negotiation.
 enum class LockMode : std::uint8_t { Locked, Disabled, MadviseOnly, Pageable, Reverted };
 
-/// One fresh anonymous page: under MCL_FUTURE, a runtime whose locked
-/// allocations fail (gVisor-style) rejects the mapping with ENOMEM. On a
-/// healthy host the page maps, locks, takes a write and releases cleanly.
+/// Probes whether the host allows locked allocations sized to the engine's pools.
+/// Under MCL_FUTURE, a runtime whose locked allocations fail (e.g. gVisor or
+/// unprivileged hosts with restricted RLIMIT_MEMLOCK) rejects the mapping/lock with ENOMEM.
+/// On a healthy host with sufficient privileges the memory maps, locks, faults and releases cleanly.
 bool locked_alloc_probe_ok() noexcept {
 #if defined(__linux__)
-    void* page = mmap(nullptr, kProbePageBytes, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+    void* page = mmap(nullptr, kProbeBytes, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
     if (page == MAP_FAILED) {
         return false;
     }
-    if (mlock(page, kProbePageBytes) != 0) {
-        munmap(page, kProbePageBytes);
+    if (mlock(page, kProbeBytes) != 0) {
+        munmap(page, kProbeBytes);
         return false;
     }
     *static_cast<volatile unsigned char*>(page) = 1;  // fault it while locked
-    munlock(page, kProbePageBytes);
-    munmap(page, kProbePageBytes);
+    munlock(page, kProbeBytes);
+    munmap(page, kProbeBytes);
     return true;
 #else
     return false;
@@ -102,9 +103,8 @@ LockMode prepare_memory_locking() noexcept {
     rl.rlim_max = RLIM_INFINITY;
     if (setrlimit(RLIMIT_MEMLOCK, &rl) != 0) {
         // Unprivileged without CAP_IPC_LOCK: expected on most hosts. Not fatal.
-        std::fprintf(stderr, "[hft] setrlimit(RLIMIT_MEMLOCK) failed (%s) — pools will be pageable, not locked\n",
+        std::fprintf(stderr, "[hft] setrlimit(RLIMIT_MEMLOCK) failed (%s) — checking locked capacity\n",
                      std::strerror(errno));
-        return LockMode::Pageable;
     }
 
     if (mlockall(MCL_CURRENT | MCL_FUTURE) != 0) {
