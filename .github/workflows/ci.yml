@@ -10,9 +10,10 @@ jobs:
   build_and_test:
     runs-on: ubuntu-latest
     strategy:
+      fail-fast: false
       matrix:
         compiler: [gcc, clang]
-        build_type: [Release, Debug]
+        build_type: [Release, Debug, Audit]   # audit H-3: Audit flavor added
 
     steps:
     - uses: actions/checkout@v4
@@ -35,16 +36,85 @@ jobs:
         cmake -B ${{github.workspace}}/build
         -DCMAKE_BUILD_TYPE=${{ matrix.build_type }}
         -DCMAKE_CXX_COMPILER=${{ matrix.compiler == 'gcc' && 'g++-13' || 'clang++-18' }}
-        ${{ matrix.compiler == 'clang' && '-DCMAKE_CXX_FLAGS="-stdlib=libc++"' || '' }}
+        -DHFT_WERROR=ON
+        ${{ matrix.compiler == 'clang' && '-DCMAKE_CXX_FLAGS=-stdlib=libc++' || '' }}
 
     - name: Build
       run: cmake --build ${{github.workspace}}/build --config ${{ matrix.build_type }} -j$(nproc)
 
-    - name: Test (Google Test)
+    - name: Test (ctest — audit M-6: ctest wiring)
       working-directory: ${{github.workspace}}/build
-      run: ASAN_OPTIONS=alloc_dealloc_mismatch=0 ./hft_tests
+      run: ctest --output-on-failure
+
+    # audit H-4a: the ASan alloc_dealloc_mismatch suppression is scoped to
+    # the clang/libc++ legs where the documented false positive occurs — no
+    # longer a process-global suppression on every job.
+    - name: Test (rerun without suppression on gcc)
+      if: matrix.compiler == 'gcc' && matrix.build_type == 'Debug'
+      working-directory: ${{github.workspace}}/build
+      run: ./hft_tests
+
+    # audit H-4b/U-14: engine smoke — a crash in main.cpp (e.g. the old
+    # mlockall/bad_alloc bug) must never again ship green.
+    - name: Smoke-run engine (Release/Audit)
+      if: matrix.build_type != 'Debug'
+      working-directory: ${{github.workspace}}/build
+      run: HFT_DISABLE_MLOCKALL=1 timeout 120 ./hft_engine
+
+    - name: Smoke-run simulation (Release only, 200k events)
+      if: matrix.build_type == 'Release'
+      working-directory: ${{github.workspace}}/build
+      run: timeout 180 ./hft_sim 200000
+
+    - name: RDTSC harness smoke (Release only)
+      if: matrix.build_type == 'Release'
+      working-directory: ${{github.workspace}}/build
+      run: timeout 120 ./hft_rdtsc_bench
 
     - name: Benchmark (Release only)
       if: matrix.build_type == 'Release'
       working-directory: ${{github.workspace}}/build
       run: ./hft_bench --benchmark_min_time=0.1s
+
+  # audit H-4b: the repo ships .clang-tidy / .clang-format — run them.
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v4
+    - name: Install tooling
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y clang-18 clang-tidy-18 clang-format-18
+    - name: clang-format check
+      run: |
+        find src tests tools -name '*.cpp' -o -name '*.h' | xargs clang-format-18 --dry-run --Werror
+    - name: clang-tidy (src/ only; third-party excluded)
+      run: |
+        cmake -B build-tidy -DCMAKE_BUILD_TYPE=Debug -DCMAKE_CXX_COMPILER=clang++-18
+        cmake --build build-tidy --target hft_engine -- -j$(nproc)
+        clang-tidy-18 -p build-tidy src/*.cpp --warnings-as-errors='*'
+
+  # Round-5: run the same end-to-end pipeline the owner runs locally
+  # (scripts/run_all.sh) — 11 phases: env, build (5 flavors), tests, fuzz,
+  # valgrind, static, bench, rdtsc, sim, smoke (incl. the gVisor self-heal
+  # simulation), summary. The verify-results bundle is uploaded on every run.
+  pipeline:
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v4
+    - name: Install pipeline tools
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y valgrind cppcheck clang-18 clang-tidy-18 clang-format-18
+        # run_all.sh looks up plain names; Debian suffixes -18
+        sudo ln -sf /usr/bin/clang++-18 /usr/local/bin/clang++
+        sudo ln -sf /usr/bin/clang-tidy-18 /usr/local/bin/clang-tidy
+        sudo ln -sf /usr/bin/clang-format-18 /usr/local/bin/clang-format
+    - name: Full verification pipeline (quick mode)
+      run: FAST=1 ./scripts/run_all.sh
+    - name: Upload verify-results bundle
+      if: always()
+      uses: actions/upload-artifact@v4
+      with:
+        name: verify-results
+        path: verify-results/
