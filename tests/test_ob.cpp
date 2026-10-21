@@ -96,7 +96,7 @@ TEST(OrderBookTest, NoMatchWhenPriceDontCross) {
                        [&](const Trade& t) noexcept { result_trades.push_back(t); });
 
     EXPECT_EQ(result_trades.size(), 0);
-    // audit fix: the non-crossing taker must REST in the book (M-5 gap)
+    // the non-crossing taker must REST in the book
     EXPECT_TRUE(ob.order_exists(2));
     EXPECT_EQ(ob.active_order_count(), 2);
 }
@@ -158,9 +158,8 @@ TEST(OrderBookTest, MarketSellOrder) {
 
 TEST(OrderBookTest, MarketOrderDoesNotRestInBook) {
     OrderBook ob(100, 0, 1000);
-    // No resting orders — market order should be REJECTED (audit report #2
-    // §2.2: previously Accepted with silent quantity discard), produce no
-    // trades, and should NOT remain in the book.
+    // No resting orders — the market order is REJECTED (nothing to trade
+    // against), produces no trades, and does NOT remain in the book.
     std::vector<Trade> result_trades;
     EXPECT_EQ(ob.add_order(1, OrderType::Market, 0, 10, Side::Buy,
                            [&](const Trade& t) noexcept { result_trades.push_back(t); }),
@@ -176,8 +175,8 @@ TEST(OrderBookTest, MarketOrderDoesNotRestInBook) {
     EXPECT_EQ(result2_trades.size(), 0);
 }
 
-// audit M-3 fix: the filled-quantity out-parameter makes market partial
-// fills visible to callers.
+// The filled-quantity out-parameter makes market partial fills visible to
+// callers.
 TEST(OrderBookTest, MarketPartialFillSurfacesFilledQuantity) {
     OrderBook ob(100, 0, 1000);
     (void)ob.add_order(1, OrderType::Limit, 100, 10, Side::Sell, [](const Trade&) noexcept {});
@@ -202,7 +201,6 @@ TEST(OrderBookTest, CancelExistingOrder) {
 
     (void)ob.add_order(1, OrderType::Cancel, 0, 0, Side::Buy, [](const Trade&) noexcept {});
 
-    // audit fix (C-3 family): the deleted assertion block is restored.
     EXPECT_FALSE(ob.order_exists(1));
     EXPECT_EQ(ob.active_order_count(), 0);
 
@@ -268,7 +266,7 @@ TEST(OrderBookTest, CancelPartiallyFilledOrder) {
 }
 
 // ============================================================
-// DUPLICATE ORDER ID TESTS (Bug #1)
+// DUPLICATE ORDER ID TESTS
 // ============================================================
 
 TEST(OrderBookTest, DuplicateOrderIdRejected) {
@@ -310,7 +308,7 @@ TEST(OrderBookTest, DuplicateIdAfterFullFill) {
               RejectReason::Accepted);
     EXPECT_TRUE(ob.order_exists(1));
 
-    // audit fix (C-3 family / report #1 §6.2): prove REPEATED reuse, not just one.
+    // prove REPEATED reuse, not just one.
     EXPECT_EQ(ob.cancel_order(1), RejectReason::Accepted);
     std::vector<Trade> result3_trades;
     EXPECT_EQ(ob.add_order(1, OrderType::Limit, 300, 7, Side::Sell,
@@ -320,7 +318,7 @@ TEST(OrderBookTest, DuplicateIdAfterFullFill) {
 }
 
 // ============================================================
-// ZERO QUANTITY & INPUT VALIDATION TESTS (Issue #6)
+// ZERO QUANTITY & INPUT VALIDATION TESTS
 // ============================================================
 
 TEST(OrderBookTest, ZeroQuantityRejected) {
@@ -346,7 +344,7 @@ TEST(OrderBookTest, ZeroQuantityMarketRejected) {
 }
 
 // ============================================================
-// ORDERRESULT STATUS TESTS (Bug #3)
+// ORDERRESULT STATUS TESTS
 // ============================================================
 
 TEST(OrderBookTest, OrderResultAcceptedOnRest) {
@@ -363,8 +361,8 @@ TEST(OrderBookTest, OrderResultAcceptedOnMatch) {
     (void)ob.add_order(1, OrderType::Limit, 100, 10, Side::Sell, [](const Trade&) noexcept {});
 
     std::vector<Trade> result_trades;
-    // audit fix (report #1 §6.2): the test is named for the result code —
-    // assert it, not just the trade count.
+    // the test is named for the result code — assert it, not just the trade
+    // count.
     EXPECT_EQ(ob.add_order(2, OrderType::Limit, 100, 10, Side::Buy,
                            [&](const Trade& t) noexcept { result_trades.push_back(t); }),
               RejectReason::Accepted);
@@ -423,9 +421,7 @@ TEST(OrderBookTest, ExhaustPoolSilentDrop) {
     EXPECT_TRUE(match_trades.empty());
 }
 
-// audit fix (C-3a / report #3 U-2/U-3): the docstring used to claim
-// "1,000,000+ contiguous combinations" while the loop ran 100 times with
-// ZERO assertions. Now: 1,000,000 cycles AND real invariant assertions.
+// 1,000,000 cycles against a 10-slot pool, with real invariant assertions.
 TEST(OrderBookTest, AllocDeallocCycleStress) {
     OrderBook ob(10, 0, 1000);
     // Allocate and cancel 1,000,000 times with only 10 pool slots.
@@ -449,7 +445,7 @@ TEST(OrderBookTest, AllocDeallocCycleStress) {
 #endif
 }
 
-// audit report #2 §6.3: fill the pool, fail, cancel one, succeed again.
+// fill the pool, fail, cancel one, succeed again.
 TEST(OrderBookTest, PoolExhaustionRecovery) {
     OrderBook ob(10, 3, 0, 1000);
     for (OrderId id = 1; id <= 3; ++id) {
@@ -465,9 +461,9 @@ TEST(OrderBookTest, PoolExhaustionRecovery) {
 }
 
 // ============================================================
-// MEMORY POOL DOUBLE-FREE DETECTION (Bug #2)
-//   The old EXPECT_THROW suite is superseded by the fault-handler tests in
-//   test_memory_pool.cpp (exception-free semantics, audit H-1/H-3). These
+// MEMORY POOL DOUBLE-FREE DETECTION
+//   The pool's own double-free / out-of-range / chain tests live in
+//   test_memory_pool.cpp (exception-free fault-handler semantics). These
 //   variants keep coverage of the pool through the OrderBook API.
 // ============================================================
 
@@ -566,9 +562,8 @@ TEST(OrderBookTest, OutOfRangePriceRejected) {
     EXPECT_EQ(result_trades.size(), 0);
 }
 
-// audit fix (report #1 §6.2): the old test was VACUOUS — it added the
-// boundary prices and asserted nothing. Now asserts acceptance AND that
-// both orders actually rested, using the introspection API (audit M-6).
+// asserts acceptance AND that both orders actually rested, using the
+// introspection API.
 TEST(OrderBookTest, BoundaryPricesAccepted) {
     OrderBook ob(100, 0, 1000);
     std::vector<Trade> result1_trades;
@@ -590,10 +585,10 @@ TEST(OrderBookTest, BoundaryPricesAccepted) {
     EXPECT_EQ(ob.level_order_count(Side::Sell, 1000), 1);
 }
 
-// audit fix (report #3 L-2): copy must be deleted; move must work.
+// copy must be deleted; move must work.
 TEST(OrderBookTest, CopyDeletedMoveAllowed) {
-    static_assert(!std::is_copy_constructible_v<OrderBook>, "OrderBook copy must be deleted (audit M-6)");
-    static_assert(!std::is_copy_assignable_v<OrderBook>, "OrderBook copy-assign must be deleted (audit M-6)");
+    static_assert(!std::is_copy_constructible_v<OrderBook>, "OrderBook copy must be deleted");
+    static_assert(!std::is_copy_assignable_v<OrderBook>, "OrderBook copy-assign must be deleted");
     static_assert(std::is_nothrow_move_constructible_v<OrderBook>, "OrderBook move must be noexcept");
     OrderBook ob(100, 100, 0, 1000);
     (void)ob.add_order(1, OrderType::Limit, 100, 10, Side::Sell, [](const Trade&) noexcept {});

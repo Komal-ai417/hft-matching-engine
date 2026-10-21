@@ -1,6 +1,6 @@
 // ============================================================================
-// StdOrderBook reference tests (audit M-7 / U-6: previously ZERO tests for
-// the benchmark baseline AND differential oracle; it contained a leak).
+// StdOrderBook reference tests: the benchmark baseline AND the
+// differential-testing oracle.
 // ============================================================================
 
 #include <gtest/gtest.h>
@@ -33,8 +33,8 @@ TEST(StdReference, BasicMatchParity) {
     EXPECT_EQ(sb.active_order_count(), 0u);
 }
 
-// THE M-7 REGRESSION TEST: buy takers fully filling resting asks used to
-// erase order_map_ but NOT side_map_ — an unbounded leak that skewed the
+// A buy taker that fully fills resting asks must erase order_map_ AND
+// side_map_ — a missing side_map_ erase is an unbounded leak that skews the
 // published memory benchmark ratios.
 TEST(StdReference, SideMapDoesNotLeakOnBuyTakerFills) {
     Trades t;
@@ -49,7 +49,7 @@ TEST(StdReference, SideMapDoesNotLeakOnBuyTakerFills) {
     }
     EXPECT_EQ(sb.active_order_count(), 0u);
     EXPECT_EQ(sb.order_exists(rounds), false);
-    // Before the fix, side_map_ held `rounds` stale entries (one per fill).
+    // side_map_ must be empty — one stale entry per fill would leak.
     EXPECT_EQ(sb.side_map_size(), 0u) << "side_map_ leaked " << sb.side_map_size() << " entries after " << rounds
                                       << " fully-filled asks";
 }

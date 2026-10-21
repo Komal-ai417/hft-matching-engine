@@ -1,7 +1,6 @@
 // ============================================================================
 // fuzz_driver.cpp — libFuzzer entry point around the differential core
-// (audit §9.5 strategy: "a LibFuzzer build of the differential core for
-// continuous deep fuzzing").
+// (a libFuzzer build of the differential core for continuous deep fuzzing).
 //
 //   clang++ -fsanitize=fuzzer,address,undefined ... tools/fuzz_driver.cpp
 //

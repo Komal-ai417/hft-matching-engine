@@ -31,11 +31,10 @@ OrderBook::OrderBook(size_t max_order_id, size_t max_active_orders, Price min_pr
       has_bids_(false),
       has_asks_(false),
       order_pool_(max_active_orders) {
-    // ── Unified fatal-error policy (audit L-4) ──────────────────────────
+    // ── Unified fatal-error policy ─────────────────────────────────────
     // Every construction-time validation aborts with a DISTINCT diagnostic
-    // message. Previously: assert+abort / bare abort / catchable bad_alloc
-    // (which became std::terminate under Release's -fno-exceptions) — three
-    // adjacent failure modes with three different observable behaviors.
+    // message. All of them abort (never throw), so the observable behaviour is
+    // the same in every build flavor, including Release's -fno-exceptions.
     if (min_price > max_price) [[unlikely]] {
         std::fprintf(stderr, "OrderBook: fatal - min_price (%u) > max_price (%u)\n", static_cast<unsigned>(min_price),
                      static_cast<unsigned>(max_price));
@@ -62,18 +61,17 @@ OrderBook::OrderBook(size_t max_order_id, size_t max_active_orders, Price min_pr
     }
 
     best_ask_ = max_price + 1;
-    best_ask_idx_ = price_range - 1;  // audit M-5: always a VALID index (was price_range = one-past-the-end)
+    best_ask_idx_ = price_range - 1;  // always a VALID index
     best_bid_idx_ = 0;
 
 #if HFT_DEBUG_TOOLS
-    owner_thread_ = std::this_thread::get_id();  // audit M-8: thread-identity latch
+    owner_thread_ = std::this_thread::get_id();  // thread-identity latch
 #endif
 
     order_map_.resize(max_order_id + 1, INVALID_INDEX);
-    // audit M-8: the six shrink_to_fit() calls were deleted — resize(n)
-    // already yields capacity() == n, so each call was an extra
-    // allocate/copy/free that also reordered page-faulting relative to the
-    // pre-touch pass.
+    // resize(n) already yields capacity() == n, so no shrink_to_fit() is
+    // needed — and each one would add an allocate/copy/free that also
+    // reorders page-faulting relative to the pre-touch pass.
 
     bids_levels_.resize(price_range);
     asks_levels_.resize(price_range);
@@ -87,11 +85,11 @@ OrderBook::OrderBook(size_t max_order_id, size_t max_active_orders, Price min_pr
     asks_summary_.resize(summary_words, 0);
 
     // Memory Pre-Touching: prevent page faults upon first access during live
-    // trading. NOTE (audit M-2): vector::resize() value-initializes (WRITES)
-    // every page already, so this block is belt-and-braces for any future
-    // refactor to lazily-allocated structures — but the calls are now
-    // (a) the correct WRITE policy and (b) checked, with a deterministic
-    // per-page touch fallback instead of silent no-ops on old kernels.
+    // trading. vector::resize() value-initializes (WRITES) every page already,
+    // so this block is belt-and-braces for any future refactor to
+    // lazily-allocated structures — but the calls are (a) the correct WRITE
+    // policy and (b) checked, with a deterministic per-page touch fallback
+    // instead of silent no-ops on old kernels.
     const size_t map_bytes = order_map_.size() * sizeof(uint32_t);
     const size_t levels_bytes = price_range * sizeof(PriceLevel);
     const size_t bitset_bytes = bitset_words * sizeof(uint64_t);
@@ -141,10 +139,9 @@ OrderBook::OrderBook(size_t max_order_id, size_t max_active_orders, Price min_pr
 
 // static
 void OrderBook::touch_fallback(void* base, size_t bytes) noexcept {
-    // POST-AUDIT REGRESSION FIX: the fallback must be READ-based. A
-    // write-based touch (`p[offset] = 0`) DESTRUCTIVELY zeroes the first byte
-    // of every page-aligned object — corrupting PriceLevel::head and pool
-    // free-list links (reproduced: every 128th level showed head=0xFFFFFF00).
+    // The fallback must be READ-based. A write-based touch (`p[offset] = 0`)
+    // DESTRUCTIVELY zeroes the first byte of every page-aligned object —
+    // corrupting PriceLevel::head and pool free-list links.
     // vector::resize() already WROTE every page; the fallback only needs to
     // guarantee the pages are resident, which a volatile read achieves.
     const auto* p = static_cast<volatile const unsigned char*>(base);

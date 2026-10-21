@@ -1,14 +1,14 @@
 // ============================================================================
-// Differential fuzz: engine vs StdOrderBook reference (audit H-5 / U-12).
+// Differential fuzz: engine vs StdOrderBook reference.
 // Both books receive identical pseudo-random operation streams; after EVERY
 // operation the result code, filled quantity, full trade vector (maker/taker/
 // price/qty, in order) and resting-count must match. At round end, exhaustive
 // market sweeps reconcile final resting liquidity, and resting-state parity
 // is spot-checked through the introspection API.
 //
-// Seven adversarial configurations (audit §9.5):
+// Seven adversarial configurations:
 //   1 BaselineMinPriceZero      — parity anchor (repo-typical usage)
-//   2 NonzeroMinPrice           — offset arithmetic everywhere (M-5 gap)
+//   2 NonzeroMinPrice           — offset arithmetic everywhere
 //   3 WordBoundaryStraddle      — bitset word boundaries at odd offsets
 //   4 WideRangeSummaryBitset    — two-level summary scans, both directions
 //   5 WideRangeNonzeroMin       — the above combined

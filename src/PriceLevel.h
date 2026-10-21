@@ -7,7 +7,7 @@
 
 namespace hft {
 
-/// Level geometry (audit §4.1 cache layout): alignment == size, so exactly
+/// Level geometry (cache layout): alignment == size, so exactly
 /// kLevelsPerLine whole levels fit in one 64-byte cache line, never straddling.
 inline constexpr size_t kCacheLineBytes = 64;
 inline constexpr size_t kLevelsPerLine = 2;
@@ -21,7 +21,7 @@ inline constexpr size_t kPriceLevelBytes = kCacheLineBytes / kLevelsPerLine;  //
 // implicit from the vector index (price = min_price + index), so no
 // Price field is stored.
 //
-// The trailing padding bytes host a debug canary (audit §8.2): the invariant
+// The trailing padding bytes host a debug canary: the invariant
 // checker verifies the magic value, catching neighbor-level overruns and
 // whole-array memset-style corruption for free in Debug/Audit builds.
 struct alignas(kPriceLevelBytes) PriceLevel {
@@ -38,8 +38,6 @@ struct alignas(kPriceLevelBytes) PriceLevel {
     PriceLevel() noexcept = default;
 
     // Append an order to the end of the queue (Time priority)
-    // NOTE (audit M-9c): single hint — the old code carried both HFT_LIKELY()
-    // and [[likely]] on the same condition; one of them was dead weight.
     HFT_FORCEINLINE void append_order(uint32_t order_idx, Order* pool_data) noexcept {
         Order& order = pool_data[order_idx];
         if (HFT_LIKELY(head != INVALID_INDEX)) {

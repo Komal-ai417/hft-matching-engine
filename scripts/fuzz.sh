@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # ============================================================================
-# fuzz.sh — continuous-fuzzing recipes (audit H-5 / §9.5).
+# fuzz.sh — continuous-fuzzing recipes.
 #   Mode A (default): libFuzzer differential core — needs clang.
 #   Mode B: g++ fallback — long-running random differential driver via the
 #           gtest binary (seed sweep; hours of coverage without deps).
@@ -34,7 +34,7 @@ if [ ! -x "$BUILD/hft_tests" ]; then
     cmake -S "$ROOT" -B "$BUILD" -DCMAKE_BUILD_TYPE=Audit > /dev/null
     cmake --build "$BUILD" --target hft_tests -j"$(nproc)" > /dev/null
 fi
-echo "[*] differential seed sweep: $COUNT iterations (audit H-5 nightly mode)"
+echo "[*] differential seed sweep: $COUNT iterations"
 for i in $(seq 1 "$COUNT"); do
     if ! "$BUILD/hft_tests" --gtest_filter='DifferentialFuzz.*' --gtest_brief=1; then
         echo "[X] differential divergence on iteration $i"

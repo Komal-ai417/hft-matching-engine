@@ -1,14 +1,9 @@
 // ============================================================================
-// audit C-1 (report #3): this simulation could NOT compile since the B-6
-// callback-safety hardening — its on_trade lambda was not noexcept, so the
-// engine's static_assert rejected the file, and because it also had no
-// CMake target, CI never noticed. The most valuable integration harness in
-// the repo had been silently dead. Fixes applied:
-//   * on_trade lambda marked noexcept (compiles again)
-//   * memory measurement works on Linux (/proc/self/status VmRSS/VmHWM),
-//     not just Windows (previously returned 0 on Linux)
-//   * event count overridable via argv[1] so CI can smoke-run it fast
-//   * registered in CMakeLists.txt
+// Real-world simulation harness: the engine and the std::map reference
+// replay the same synthetic event stream (market-maker quotes, retail
+// limit orders, institutional sweeps) and are compared on time and memory.
+//
+// The event count is overridable via argv[1] so CI can smoke-run it fast.
 // ============================================================================
 #include <chrono>
 #include <cstdio>
@@ -177,7 +172,7 @@ int main(int argc, char* argv[]) {
         uint64_t volume = 0;
         const size_t peak_before = getPeakMemoryUsage();
 
-        // AUDIT C-1 FIX: noexcept — matches the engine's enforced callback contract.
+        // noexcept — matches the engine's enforced callback contract.
         auto on_trade = [&](const Trade& t) noexcept {
             total_trades++;
             volume += t.quantity;

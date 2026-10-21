@@ -6,11 +6,11 @@
  * -----------------
  * On certain runtimes (gVisor/sandbox containers) mlockall() reports success
  * but every subsequent "locked" allocation — a fresh anonymous mapping under
- * MCL_FUTURE — fails with ENOMEM. Before the Round-4 fix that killed the
- * engine mid-startup: the order-pool reservation failed inside std::vector's
- * allocator, surfaced as std::bad_alloc, and terminated the process outright
- * under -fno-exceptions. The engine now probes one page right after
- * mlockall() and self-heals to pageable memory (see src/main.cpp).
+ * MCL_FUTURE — fails with ENOMEM. That kills the engine mid-startup: the
+ * order-pool reservation fails inside std::vector's allocator, surfaces as
+ * std::bad_alloc, and terminates the process outright under -fno-exceptions.
+ * The engine probes one page right after mlockall() and self-heals to
+ * pageable memory (see src/main.cpp).
  *
  * This preload interposes exactly the four calls involved:
  *   mlockall()   -> best-effort real MCL_CURRENT, then LIE about success

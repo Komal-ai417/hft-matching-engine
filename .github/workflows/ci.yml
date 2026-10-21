@@ -13,7 +13,7 @@ jobs:
       fail-fast: false
       matrix:
         compiler: [gcc, clang]
-        build_type: [Release, Debug, Audit]   # audit H-3: Audit flavor added
+        build_type: [Release, Debug, Audit]   # Audit = instrumented -O2 build
 
     steps:
     - uses: actions/checkout@v4
@@ -39,20 +39,20 @@ jobs:
     - name: Build
       run: cmake --build ${{github.workspace}}/build --config ${{ matrix.build_type }} -j$(nproc)
 
-    - name: "Test (ctest — audit M-6: ctest wiring)"
+    - name: "Test (ctest)"
       working-directory: ${{github.workspace}}/build
       run: ctest --output-on-failure
 
-    # audit H-4a: the ASan alloc_dealloc_mismatch suppression is scoped to
-    # the clang/libc++ legs where the documented false positive occurs — no
-    # longer a process-global suppression on every job.
+    # The ASan alloc_dealloc_mismatch suppression is scoped to the
+    # clang/libc++ legs where the documented false positive occurs — not a
+    # process-global suppression on every job.
     - name: Test (rerun without suppression on gcc)
       if: matrix.compiler == 'gcc' && matrix.build_type == 'Debug'
       working-directory: ${{github.workspace}}/build
       run: ./hft_tests
 
-    # audit H-4b/U-14: engine smoke — a crash in main.cpp (e.g. the old
-    # mlockall/bad_alloc bug) must never again ship green.
+    # Engine smoke — a crash in main.cpp (e.g. an mlockall/bad_alloc
+    # failure) must never ship green.
     - name: Smoke-run engine (Release/Audit)
       if: matrix.build_type != 'Debug'
       working-directory: ${{github.workspace}}/build
@@ -73,7 +73,7 @@ jobs:
       working-directory: ${{github.workspace}}/build
       run: ./hft_bench --benchmark_min_time=0.1s
 
-  # audit H-4b: the repo ships .clang-tidy / .clang-format — run them.
+  # The repo ships .clang-tidy / .clang-format — run them.
   lint:
     runs-on: ubuntu-latest
     steps:
@@ -91,7 +91,7 @@ jobs:
         cmake --build build-tidy --target hft_engine -- -j$(nproc)
         clang-tidy-18 -p build-tidy src/*.cpp --warnings-as-errors='*'
 
-  # Round-5: run the same end-to-end pipeline the owner runs locally
+  # Run the same end-to-end pipeline the owner runs locally
   # (scripts/run_all.sh) — 11 phases: env, build (5 flavors), tests, fuzz,
   # valgrind, static, bench, rdtsc, sim, smoke (incl. the gVisor self-heal
   # simulation), summary. The verify-results bundle is uploaded on every run.

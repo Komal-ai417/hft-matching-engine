@@ -1,13 +1,13 @@
 // ============================================================================
-// OrderBook correctness gap tests (audit M-5 / §6.3 report #1 / §10 report #3).
-// Every family here was ZERO-coverage in the original suite:
+// OrderBook correctness gap tests. Every family here was ZERO-coverage in
+// the original suite:
 //   * nonzero min_price books (all 30 original tests used min_price = 0)
 //   * cancel-the-best-level -> next-best becomes matchable (both sides, gaps)
 //   * queue-position cancels (head/middle/tail of multi-order levels)
 //   * multi-maker partial fills
 //   * wide price ranges (> 4096 ticks) exercising the two-level summary scans
 //   * word-boundary straddles (prices 63/64/65 and nonzero-min variants)
-//   * pool-exhaustion full cycle + the P-7 taker invariant
+//   * pool-exhaustion full cycle + the taker invariant
 //   * market-order semantics: filled_out surface, IOC remainder
 //   * 5,000-op deterministic mixed-sequence reconciliation
 // ============================================================================
@@ -321,7 +321,7 @@ TEST(OrderBookRecovery, SweepEmptiesEntireBookThenRecovers) {
     EXPECT_EQ(got[0].maker_id, 5);
 }
 
-// ── P-7 invariant: a taker that trades can never return PoolExhausted ────
+// ── Taker invariant: a taker that trades can never return PoolExhausted ────
 
 TEST(OrderBookPoolInvariant, SweepFreesPoolCapacityForTakerRemainder) {
     Trades got;

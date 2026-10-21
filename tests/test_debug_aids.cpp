@@ -1,8 +1,8 @@
 // ============================================================================
-// Debugging-aids tests (audit H-2, M-8, §8.4-§8.7): the event journal, the
-// re-entrancy latch, the thread-identity latch and the fault-handler plumbing
-// that makes both latches testable. All Debug/Audit-only (Release compiles
-// the aids out by design — the RELEASE_NO_TOOLS test below pins that).
+// Debugging-aids tests: the event journal, the re-entrancy latch, the
+// thread-identity latch and the fault-handler plumbing that makes both
+// latches testable. All Debug/Audit-only (Release compiles the aids out by
+// design — the RELEASE_NO_TOOLS test below pins that).
 // ============================================================================
 
 #include <gtest/gtest.h>
@@ -34,7 +34,7 @@ struct BookFaultRecorder {
 };
 }  // namespace
 
-// ── Re-entrancy latch (audit H-2: documented but previously unenforced) ───
+// ── Re-entrancy latch ───────────────────────────────────────────
 
 TEST(DebugAids, ReentrancyLatchBlocksNestedAddOrder) {
     BookFaultRecorder rec;
@@ -84,7 +84,7 @@ TEST(DebugAids, NormalCallbackNeverTripsLatch) {
     EXPECT_TRUE(ob.validate_book());
 }
 
-// ── Thread-identity latch (audit M-8) ─────────────────────────────────────
+// ── Thread-identity latch ───────────────────────────────────────
 
 TEST(DebugAids, ThreadLatchBlocksForeignThreadCalls) {
     BookFaultRecorder rec;
@@ -107,7 +107,7 @@ TEST(DebugAids, ThreadLatchBlocksForeignThreadCalls) {
     EXPECT_TRUE(ob.validate_book());
 }
 
-// ── Journal: order lifecycle tracking (audit §8.4) ────────────────────────
+// ── Journal: order lifecycle tracking ────────────────────────────
 
 TEST(DebugAids, JournalRecordsFullLifecycle) {
     OrderBook ob(100, 100, 0, 1000);
@@ -168,7 +168,7 @@ TEST(DebugAids, JournalRingWrapsWithoutAllocation) {
     EXPECT_TRUE(ob.validate_book());           // book survived the churn
 }
 
-// ── validate_book() internal-consistency net (audit §8.5) ─────────────────
+// ── validate_book() internal-consistency net ─────────────────────
 
 TEST(DebugAids, ValidateBookCleanAcrossScenarioMatrix) {
     std::vector<Trade> trades;

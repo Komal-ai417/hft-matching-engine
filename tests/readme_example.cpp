@@ -1,9 +1,8 @@
 // ============================================================================
-// README example — compiled verbatim as a regression test (audit C-2:
-// the README "API" example did NOT compile against the engine's enforced
-// noexcept-callback contract; documentation drifted from the API. This file
-// is the compile-guard: if the README example is updated, update this file
-// in the same commit).
+// README example — compiled verbatim as a regression test. The README "API"
+// example must compile against the engine's enforced noexcept-callback
+// contract, so documentation cannot drift from the API. If the README
+// example is updated, update this file in the same commit.
 // ============================================================================
 
 #include <gtest/gtest.h>

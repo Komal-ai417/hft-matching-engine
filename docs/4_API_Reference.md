@@ -76,12 +76,8 @@ Defined in `OrderBook.h`. Returned by `add_order` / `cancel_order`
 | `OutOfBoundsPrice` | `4` | `price < min_price` or `price > max_price` for Limit orders. |
 | `CancelFailed` | `5` | `order_map_[id] == INVALID_INDEX` (order does not exist or was already filled). |
 | `PoolExhausted` | `6` | Pool exhausted, order cannot be posted. |
-| `MarketOnEmptyBook` | `7` | Market order against an empty opposite side (previously returned `Accepted` with the quantity silently discarded). |
+| `MarketOnEmptyBook` | `7` | Market order against an empty opposite side (the quantity would otherwise be silently discarded). |
 | `ReentrancyBlocked` | `8` | Debug/Audit latch (re-entrancy or foreign-thread call) blocked the operation. |
-
-> Audit fix L-2: the previous table listed the values off-by-one and claimed
-> validation failures were "silent early returns" — they never were; the
-> engine has returned `RejectReason` since the result-code hardening.
 
 ---
 

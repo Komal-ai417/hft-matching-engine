@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # ============================================================================
-# bench_matrix.sh — build-and-run matrix across flavors and compilers
-# (audit §9.5 / M-6). Runs, per available compiler × {Release, Audit}:
+# bench_matrix.sh — build-and-run matrix across flavors and compilers.
+# Runs, per available compiler × {Release, Audit}:
 #   * the full Google Benchmark suite (short min_time)   [Release only]
 #   * the RDTSC percentile harness
 #   * the real-world simulation smoke (200k events)

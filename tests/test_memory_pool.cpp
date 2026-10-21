@@ -1,10 +1,9 @@
 // ============================================================================
-// MemoryPool unit tests (audit M-5/U-5: previously ZERO direct tests — which
-// is how the H-1a deallocate_chain overflow survived). Covers: allocation
-// order, exhaustion, LIFO recycling, double-free / out-of-range / chain
-// faults (exception-free, via the fault handler), poison canaries,
-// generation stamps, allocation statistics, free-list depth reconciliation,
-// template genericity (M-1a) and a 10k-op shadow-model property test.
+// MemoryPool unit tests. Covers: allocation order, exhaustion, LIFO
+// recycling, double-free / out-of-range / chain faults (exception-free, via
+// the fault handler), poison canaries, generation stamps, allocation
+// statistics, free-list depth reconciliation, template genericity and a
+// 10k-op shadow-model property test.
 // ============================================================================
 
 #include <gtest/gtest.h>
@@ -45,7 +44,7 @@ struct FaultRecorder {
 };
 }  // namespace
 
-// ── Layout / template constraints (audit M-1, compile-time) ──────────────
+// ── Layout / template constraints (compile-time) ──────────────
 TEST(MemoryPoolLayoutTest, OrderContractEnforced) {
     static_assert(sizeof(Order) == 24);
     static_assert(std::is_trivially_copyable_v<Order>);
@@ -53,9 +52,9 @@ TEST(MemoryPoolLayoutTest, OrderContractEnforced) {
 }
 
 TEST(MemoryPoolLayoutTest, GenericTrivialPODInstantiable) {
-    // audit M-1a: debug-mode deallocate_chain used to read T::next, so any
-    // T without a `next` member failed to compile in Debug. A plain POD must
-    // now be instantiable AND chain-freeable in every instrumented flavor.
+    // The debug-mode deallocate_chain walks the overlay link, not T::next, so
+    // any T without a `next` member stays instantiable. A plain POD must be
+    // instantiable AND chain-freeable in every instrumented flavor.
     struct Blob {
         uint32_t link;
         uint64_t payload;
@@ -120,8 +119,8 @@ TEST(MemoryPoolAllocateTest, LIFORecyclingAfterFree) {
 }
 
 TEST(MemoryPoolAllocateTest, CapacityClampDocumented) {
-    // audit M-7: capacity is size_t but indices are uint32_t; the pool clamps
-    // to 0xFFFF'FFFE in its constructor instead of wrapping silently.
+    // capacity is size_t but indices are uint32_t; the pool clamps to
+    // 0xFFFF'FFFE in its constructor instead of wrapping silently.
     // (We cannot instantiate a >2^32-slot pool to observe the clamp directly;
     // the clamp line is verified by review + the small-pool edge below.)
     static_assert(INVALID_INDEX == 0xFFFF'FFFFu);
@@ -177,7 +176,7 @@ TEST(MemoryPoolDeallocateTest, ReleaseDoubleFreeIsDocumentedTrust) {
 }
 #endif
 
-// ── deallocate_chain() — audit H-1a coverage ─────────────────────────────
+// ── deallocate_chain() ──────────────────────────────────────────────
 #if HFT_DEBUG_TOOLS
 TEST(MemoryPoolChainTest, FreesWholeChainInLinkPath) {
     MemoryPool<Order> pool(8);
@@ -209,10 +208,8 @@ TEST(MemoryPoolChainTest, SingleElementChain) {
     EXPECT_EQ(pool.stats().free_list_depth, 4);
 }
 
-// THE H-1a REPRODUCER (audit report #3): `deallocate_chain(0, 500)` on a
-// capacity-2 pool used to be a 4-byte heap-buffer-overflow WRITE past the
-// slab (the tail was never validated before the splice). With the argument
-// guard this must now fault cleanly instead of corrupting memory.
+// An out-of-range tail must fault cleanly instead of splicing a write past
+// the slab: `deallocate_chain(0, 500)` on a capacity-2 pool.
 TEST(MemoryPoolChainTest, ChainWithInvalidTailNoLongerOverflows) {
     FaultRecorder rec;
     MemoryPool<Order> pool(2);
@@ -281,7 +278,7 @@ TEST(MemoryPoolLifecycleTest, IsAllocatedAccurate) {
 }
 #endif
 
-// ── Poison canaries & generation stamps (audit §8.1, M-3) ────────────────
+// ── Poison canaries & generation stamps ────────────────────────────────
 #if HFT_DEBUG_TOOLS
 TEST(MemoryPoolCanaryTest, FreedSlotPayloadIsPoisoned) {
     MemoryPool<Order> pool(4);
@@ -318,7 +315,7 @@ TEST(MemoryPoolCanaryTest, GenerationIncrementsPerReallocation) {
 }
 #endif
 
-// ── Allocation tracking / statistics (audit §8.3) ─────────────────────────
+// ── Allocation tracking / statistics ─────────────────────────────────
 #if HFT_DEBUG_TOOLS
 TEST(MemoryPoolStatsTest, CountersAndHighWater) {
     MemoryPool<Order> pool(10);
@@ -394,7 +391,7 @@ TEST(MemoryPoolPropertyTest, RandomAllocFreeMatchesShadowModel) {
             pool.deallocate(idx);
             EXPECT_EQ(shadow_live.erase(idx), 1u);
         }
-        // Continuous reconciliation (audit §8.3 invariant):
+        // Continuous reconciliation:
         if ((op % 97) == 0) {
             const auto st = pool.stats();
             EXPECT_EQ(st.live_count, shadow_live.size());

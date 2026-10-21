@@ -1,6 +1,6 @@
 #pragma once
 
-// Journal.h — order lifecycle tracking for Debug/Audit builds (audit §8.4).
+// Journal.h — order lifecycle tracking for Debug/Audit builds.
 //
 // A fixed-capacity append-only ring of compact event records written at every
 // order state transition inside OrderBook. Single-threaded append is a store

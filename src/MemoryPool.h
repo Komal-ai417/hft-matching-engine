@@ -5,33 +5,30 @@
 // during the critical matching paths.
 //
 // ============================================================================
-// AUDIT FIXES APPLIED IN THIS FILE (see AUDIT_REMEDIATION_REPORT.md)
+// DESIGN NOTES
 // ----------------------------------------------------------------------------
-//  * Strict-aliasing / type-punning fixed: every free-list overlay access now
-//    goes through std::memcpy (report #2 §2.1; report #3 M-1c). The old
-//    *reinterpret_cast<uint32_t*>(slot) was UB for any T whose first member
-//    is not exactly a uint32_t.
-//  * deallocate_chain validates head AND tail BEFORE the splice write
-//    (report #3 H-1a — previously an unvalidated tail was a heap-buffer-
-//    overflow WRITE in both Debug and Release).
-//  * Debug chain walk no longer names T::next — MemoryPool<T> is now genuinely
-//    generic in debug builds too (report #3 M-1a: the old walk read
-//    pool_[cur].next, so any T without a `next` member failed to compile).
-//  * Slot state stamps + generation counters (report #3 §8.1): FREE/LIVE
-//    magic bytes detect double-free and wild frees in Debug AND Audit.
-//  * Freed slots are poisoned with 0xDD (report #1 M-3, report #2 §4.1) so
-//    use-after-free reads pop immediately in instrumented builds.
+//  * Strict-aliasing safe: the free-list overlay is read and written through
+//    std::memcpy, so the overlaid bytes are never accessed through a
+//    mismatched pointer type.
+//  * deallocate_chain validates head AND tail BEFORE splicing the chain, so an
+//    out-of-range index can never become a heap-buffer-overflow write.
+//  * The debug chain walk follows the overlaid link, not T::next, so the
+//    template works for any trivially-copyable T.
+//  * Slot state stamps + generation counters detect double-free and wild
+//    frees in Debug AND Audit builds.
+//  * Freed slots are poisoned with 0xDD so use-after-free reads pop
+//    immediately in instrumented builds.
 //  * Allocation tracking: alloc/free/live/high-water counters, free-list
-//    depth reconciliation and a destruction-time leak report (report #3 §8.3).
-//  * Fault reporting is exception-free by default (report #1 H-1, report #3
-//    H-3): a settable handler + deterministic abort. The old `throw` collided
-//    with Release's -fno-exceptions and made HFT_AUDIT_MODE a dead config.
-//  * Template constraints enforced at compile time (report #3 M-1, report #1
-//    M-7): sizeof/alignof gates, triviality gates, capacity clamp to uint32.
-//  * Free-list head is prefetched on deallocate (report #2 §3.1) to warm the
-//    next allocation's cache line.
-//  * madvise pre-touch now checks its return and falls back to a per-page
-//    touch loop (report #1 M-9, report #3 M-2).
+//    depth reconciliation and a destruction-time leak report.
+//  * Fault reporting is exception-free by default (a settable handler plus a
+//    deterministic abort), so it behaves identically under Release's
+//    -fno-exceptions.
+//  * Template constraints are enforced at compile time: sizeof/alignof gates,
+//    triviality gates, capacity clamp to uint32.
+//  * The free-list head is prefetched on deallocate to warm the next
+//    allocation's cache line.
+//  * madvise pre-touch checks its return and falls back to a per-page touch
+//    loop.
 // ============================================================================
 
 #pragma once
@@ -44,7 +41,7 @@
 #include <vector>
 
 #include "Macros.h"
-#include "Order.h"  // INVALID_INDEX (audit L-1: this header must be self-contained)
+#include "Order.h"  // INVALID_INDEX
 #if defined(__linux__)
 #include <sys/mman.h>
 #elif defined(_WIN32)
@@ -53,7 +50,7 @@
 
 namespace hft {
 
-/// Magic state bytes for slot stamping in HFT_DEBUG_TOOLS builds (§8.1).
+/// Magic state bytes for slot stamping in HFT_DEBUG_TOOLS builds.
 enum class SlotState : uint8_t {
     Free = 0xF7,  ///< Slot is on the free list (payload poisoned).
     Live = 0xA5,  ///< Slot is owned by a live order.
@@ -84,7 +81,7 @@ inline PoolFaultHandler set_pool_fault_handler(PoolFaultHandler handler) noexcep
 
 namespace detail {
 
-/// Capacity clamp (audit M-7): slot indices are uint32_t and INVALID_INDEX
+/// Capacity clamp: slot indices are uint32_t and INVALID_INDEX
 /// (0xFFFFFFFF) must stay reserved, so the largest legal capacity is one less.
 inline constexpr size_t kMaxPoolCapacity = 0xFFFF'FFFEu;
 
@@ -99,7 +96,7 @@ inline bool& pool_leak_report_flag() noexcept {
 
 }  // namespace detail
 
-/// Opt-in destruction-time leak reporting (audit §8.3). Tests and
+/// Opt-in destruction-time leak reporting. Tests and
 /// applications that intentionally end with resting orders leave live slots
 /// in the pool — that is not a leak. Enable this when a session drain is
 /// expected to have returned every slot (e.g. after a market sweep).
@@ -111,7 +108,7 @@ namespace detail {
 
 /// Central fault path for MemoryPool: call the handler (if any), then either
 /// abort or let the caller skip the operation. NEVER throws — the pool must
-/// behave identically in Debug, Audit and Release fault shapes (audit H-1/H-3).
+/// behave identically in Debug, Audit and Release fault shapes.
 [[nodiscard]] inline FaultAction pool_fault(const char* message, size_t slot_index) noexcept {
     // Re-fetch through the setter's storage so tests can chain handlers.
     PoolFaultHandler handler = set_pool_fault_handler(nullptr);
@@ -184,7 +181,7 @@ class MemoryPool {
 
     explicit MemoryPool(size_t max_capacity)
         : capacity_(max_capacity > detail::kMaxPoolCapacity ? detail::kMaxPoolCapacity
-                                                            : max_capacity)  // audit M-7: indices are uint32
+                                                            : max_capacity)  // indices are uint32
     {
         pool_.resize(capacity_);
 #if HFT_DEBUG_TOOLS
@@ -204,13 +201,12 @@ class MemoryPool {
 
         // Memory Pre-Touching: fault in all pages immediately so no first-write
         // page fault can land mid-trade. madvise is checked and falls back to a
-        // deterministic touch loop (audit M-2 / M-9: failures were previously
-        // silently discarded).
+        // deterministic touch loop.
         const size_t pool_bytes = capacity_ * sizeof(T);
 #if defined(__linux__) && defined(MADV_POPULATE_WRITE)
-        // MADV_POPULATE_WRITE (Linux >= 5.14) faults pages READ/WRITE — the
-        // old MADV_POPULATE_READ mapped the shared zero page read-only, so the
-        // first *write* still took a copy-on-write fault (audit M-2).
+        // MADV_POPULATE_WRITE (Linux >= 5.14) faults pages READ/WRITE;
+        // MADV_POPULATE_READ maps the shared zero page read-only, so the
+        // first *write* would still take a copy-on-write fault.
         if (pool_bytes > 0 && madvise(pool_.data(), pool_bytes, MADV_POPULATE_WRITE) != 0) {
             touch_pages_fallback(pool_.data(), pool_bytes);
         }
@@ -235,7 +231,7 @@ class MemoryPool {
 #endif
     }
 
-    MemoryPool(const MemoryPool&) = delete;             // audit L-2/M-6: copying a pool aliases
+    MemoryPool(const MemoryPool&) = delete;             // copying a pool aliases
     MemoryPool& operator=(const MemoryPool&) = delete;  // logical slot identity across books.
     MemoryPool(MemoryPool&&) noexcept = default;        // vector relocation keeps indices valid.
     MemoryPool& operator=(MemoryPool&&) noexcept = default;
@@ -270,7 +266,7 @@ class MemoryPool {
     // Return an object to the pool via intrusive free-list push.
 #if HFT_DEBUG_TOOLS
     // Instrumented deallocate: detects out-of-range indices, double frees and
-    // wild frees via slot state stamps. Faults are exception-free (audit H-1).
+    // wild frees via slot state stamps. Faults are exception-free.
     void deallocate(uint32_t index) {
         if (HFT_UNLIKELY(index >= capacity_)) {
             if (detail::pool_fault("MemoryPool::deallocate: index does not belong to this pool", index) ==
@@ -291,7 +287,7 @@ class MemoryPool {
 
         T* ptr = &pool_[index];
         poison_payload(ptr, POISON_BYTE_FREED);
-        // Warm the next allocation's cache line (audit report #2 §3.1).
+        // Warm the next allocation's cache line.
         if (HFT_LIKELY(free_head_ != INVALID_INDEX)) {
             HFT_PREFETCH(&pool_[free_head_], 1, 3);
         }
@@ -317,11 +313,9 @@ class MemoryPool {
     // free-list continuation. This is the bulk-teardown path credited with the
     // ~20x batch-match speedup, and it is the pool's most fragile operation.
 #if HFT_DEBUG_TOOLS
-    // Instrumented chain free: validates head and tail BEFORE any write
-    // (audit H-1a — the old code spliced an unvalidated tail, a heap-buffer-
-    // overflow write reachable in Debug AND Release), verifies each walked
-    // slot's state, and walks the overlay link (not T::next) so the template
-    // stays generic (audit M-1a).
+    // Instrumented chain free: validates head and tail BEFORE any write,
+    // verifies each walked slot's state, and walks the overlay link (not
+    // T::next) so the template stays generic.
     void deallocate_chain(uint32_t head, uint32_t tail) {
         if (HFT_UNLIKELY(head >= capacity_ || tail >= capacity_)) {
             if (detail::pool_fault("MemoryPool::deallocate_chain: head/tail index out of range",
@@ -384,7 +378,7 @@ class MemoryPool {
     [[nodiscard]] const T* data() const noexcept { return pool_.data(); }
 
     /// Returns true if the given index is currently allocated from this pool.
-    /// In Release this degenerates to a bounds check (audit H-1c) — code that
+    /// In Release this degenerates to a bounds check — code that
     /// needs a real answer must run in Debug/Audit.
     [[nodiscard]] bool is_allocated(uint32_t index) const noexcept {
 #if HFT_DEBUG_TOOLS
@@ -395,7 +389,7 @@ class MemoryPool {
     }
 
 #if HFT_DEBUG_TOOLS
-    /// Allocation statistics (audit §8.3). Only in Debug/Audit builds.
+    /// Allocation statistics. Only in Debug/Audit builds.
     struct Stats {
         size_t total_allocs;
         size_t total_frees;
@@ -410,7 +404,7 @@ class MemoryPool {
     }
 
     /// Walk the overlay free list and return its depth. A value != capacity() -
-    /// live_count() is direct evidence of free-list corruption (audit §8.3).
+    /// live_count() is direct evidence of free-list corruption.
     /// Cycles (corruption) are detected and reported as SIZE_MAX instead of
     /// looping forever — the walk is bounded by capacity + 1 steps.
     [[nodiscard]] size_t free_list_depth() const noexcept {
@@ -440,7 +434,7 @@ class MemoryPool {
         if (index >= capacity_ || allocated_[index]) {
             return false;
         }
-        // Byte-level canary inspection is the audited design (§8.1).
+        // Byte-level canary inspection.
         // NOLINTNEXTLINE(cppcoreguidelines-pro-type-reinterpret-cast)
         const auto* bytes = reinterpret_cast<const unsigned char*>(&pool_[index]);
         for (size_t i = sizeof(uint32_t); i < sizeof(T); ++i) {
@@ -456,9 +450,7 @@ class MemoryPool {
     static void touch_pages_fallback(void* base, size_t bytes) noexcept {
         // Deterministic per-page READ so faults happen HERE, not mid-trade.
         // MUST NOT WRITE: a write-based touch zeroes the first byte of every
-        // page-aligned slot — corrupting free-list links (post-audit regression
-        // fix; the original code's `p[offset] = 0` had this latent bug on
-        // non-Linux/non-Windows platforms).
+        // page-aligned slot, corrupting free-list links.
         const auto* p = static_cast<volatile const unsigned char*>(base);
         unsigned char sink = 0;
         for (size_t offset = 0; offset < bytes; offset += detail::kPageSize) {
@@ -469,7 +461,7 @@ class MemoryPool {
 
     /// Poison a slot's payload (everything past the 4-byte overlay link).
     static void poison_payload(T* slot, uint8_t pattern) noexcept {
-        // Byte-level poison fill is the audited design (§8.1).
+        // Byte-level poison fill.
         // NOLINTNEXTLINE(cppcoreguidelines-pro-type-reinterpret-cast)
         auto* bytes = reinterpret_cast<unsigned char*>(slot);
         if constexpr (sizeof(T) > sizeof(uint32_t)) {

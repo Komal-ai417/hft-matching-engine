@@ -43,7 +43,7 @@ enum class OrderType : uint8_t {
  * self-contained, allowing dense packing inside the `MemoryPool` and
  * massively improving L1/L2 cache hit rates during order traversal.
  *
- * LAYOUT NOTE (audit finding L-5 of report #1 / §4.1 of report #3):
+ * LAYOUT NOTE:
  * The struct is exactly 24 bytes. `next` and `prev` MUST stay as the first
  * two members: MemoryPool's intrusive free-list overlays its link in the
  * FIRST 4 BYTES of every slot (via memcpy — see MemoryPool.h), which lands
@@ -69,7 +69,7 @@ struct Order {
         : next(INVALID_INDEX), prev(INVALID_INDEX), id(id_), price(price_), quantity(quantity_), side(side_) {}
 };
 
-// Layout contract — enforced at compile time (audit L-5).
+// Layout contract — enforced at compile time.
 static_assert(sizeof(Order) == ORDER_BYTES,
               "Order must stay 24 bytes: 2.67 fit per 64B cache line and MemoryPool's free-list overlay depends on the "
               "first 4 bytes.");

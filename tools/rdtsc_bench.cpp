@@ -3,8 +3,8 @@
 //
 // Measures per-operation latency in CPU cycles via RDTSCP (serializing) and
 // reports p50 / p90 / p99 / p99.9 / max percentiles plus ops/sec. Scenarios
-// cover the four engine paths plus a "churn" fragmentation case (audit
-// report #2 §7). Designed to be run:
+// cover the four engine paths plus a "churn" fragmentation case. Designed
+// to be run:
 //   * pinned to an isolated core (taskset), and
 //   * with Turbo/SpeedStep disabled if absolute numbers matter.
 // ============================================================================
@@ -174,7 +174,7 @@ int main() {
         print_report("cancel (resting order)", report(std::move(cyc)), cyc.size(), tsc_hz);
     }
 
-    // ── 5. Churn fragmentation (audit report #2 §7) ─────────────────────
+    // ── 5. Churn fragmentation ─────────────────────────────────────────
     {
         struct FastRng {
             uint64_t s = 0x1234'5678'9ABC'DEF0ULL;

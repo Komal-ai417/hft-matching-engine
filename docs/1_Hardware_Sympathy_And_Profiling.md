@@ -43,7 +43,7 @@ To achieve consistent validation of hardware sympathy, benchmarks were run insid
 
 High IPC (Instructions Per Cycle) relies heavily on predictable branch execution. In a naive matching engine, checking `if (side == Buy)` inside the hot matching loop causes consistent branch mispredictions, stalling the CPU pipeline for 15-20 cycles.
 
-### The Fix: Template Specialization
+### The Technique: Template Specialization
 We eradicated branch overhead from the core logic by templating the `match_order` function:
 
 ```cpp

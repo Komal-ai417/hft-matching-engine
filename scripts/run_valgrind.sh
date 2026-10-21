@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 # ============================================================================
 # run_valgrind.sh — Valgrind Memcheck pass over the test suite and the
-# standalone harnesses (audit §8.8: "one clean run per release"). Requires
-# the Release config so pool instrumentation doesn't generate its own noise.
+# standalone harnesses ("one clean run per release"). Requires the Release
+# config so pool instrumentation doesn't generate its own noise.
 # ============================================================================
 set -uo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"

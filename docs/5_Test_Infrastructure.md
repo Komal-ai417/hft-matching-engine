@@ -4,7 +4,7 @@ This document describes the build-flavor matrix, the debugging aids compiled
 into each flavor, and every testing / performance tool shipped in the repo.
 It replaces the informal notes that previously lived only in the README.
 
-## 1. Build flavors (audit H-3)
+## 1. Build flavors
 
 The library has three build gears. `HFT_DEBUG_TOOLS` (defined in
 `src/Macros.h` as `!NDEBUG || HFT_AUDIT_MODE`) is the single switch that
@@ -22,10 +22,10 @@ governs every debugging aid.
   `deallocate` verifies the stamp and faults (with slot index + pool
   statistics) on double-free / wild frees. Faults are exception-free
   (handler hook + deterministic abort), so behavior is identical in every
-  flavor (audit H-1/H-3).
+  flavor.
 * **Poison patterns** — freed slots are filled with `0xDD` (past the 4-byte
   free-list link), freshly allocated slots with `0xDE`; stale reads pop
-  immediately (audit M-3 / report #2 §4.1).
+  immediately.
 * **Generation stamps** — per-slot 8-bit allocation counters.
 * **Allocation tracking** — alloc/free/live/high-water counters,
   `free_list_depth()` reconciliation, opt-in destruction-time leak report
@@ -33,15 +33,15 @@ governs every debugging aid.
 * **Order lifecycle journal** — fixed-size ring of 24-byte records for
   SUBMIT / REJECT / REST / TRADE / MAKER_FILLED / CANCEL / POOL_EXHAUSTED /
   BEST_BID / BEST_ASK events with RDTSC timestamps
-  (`ob.journal().dump(stderr)`; audit §8.4).
+  (`ob.journal().dump(stderr)`).
 * **Re-entrancy latch** — nested `add_order`/`cancel_order` from inside a
-  trade callback is blocked and reported (audit H-2).
+  trade callback is blocked and reported.
 * **Thread-identity latch** — public entry points assert the constructing
-  thread (audit M-8).
+  thread.
 * **`validate_book()`** — full cross-structural reconciliation: per-level
   totals and canaries, bidirectional link integrity, pool liveness, map
   back-references, bitset/summary parity, best-price extrema, and count
-  agreement across `active_count_` / pool / map / level walks (audit §8.5).
+  agreement across `active_count_` / pool / map / level walks.
 
 ### Release contract
 
@@ -54,14 +54,14 @@ which is why CI runs the Audit flavor before any Release artifact ships.
 
 | File | Suites | What it covers |
 | :--- | :--- | :--- |
-| `tests/test_ob.cpp` | original 28, hardened | Matching, markets, cancels, validation, pool boundaries — weak/vacuous tests fixed (assertions restored, 1M-cycle stress, repeated ID reuse) |
-| `tests/test_memory_pool.cpp` | 18+ | Allocation order, exhaustion, LIFO, double-free/out-of-range/chain faults (incl. the H-1a reproducer), canaries, generations, stats, 10k-op shadow-model property test |
-| `tests/test_price_level.cpp` | 13 | First-ever direct coverage: append/remove semantics, links both directions, canary, 2k-op shadow-model property test |
-| `tests/test_orderbook_correctness.cpp` | 30 | Nonzero `min_price`, cancel-best across gaps (both sides), queue-position cancels, multi-maker partial fills, wide-range summary scans (>4096 ticks), word-boundary straddles, pool-exhaustion invariants (P-7), market `filled_out` semantics, 5k-op reconciliation |
+| `tests/test_ob.cpp` | 28 | Matching, markets, cancels, validation, pool boundaries — assertions restored, 1M-cycle stress, repeated ID reuse |
+| `tests/test_memory_pool.cpp` | 18+ | Allocation order, exhaustion, LIFO, double-free/out-of-range/chain faults (incl. the out-of-range-tail reproducer), canaries, generations, stats, 10k-op shadow-model property test |
+| `tests/test_price_level.cpp` | 13 | Direct coverage: append/remove semantics, links both directions, canary, 2k-op shadow-model property test |
+| `tests/test_orderbook_correctness.cpp` | 30 | Nonzero `min_price`, cancel-best across gaps (both sides), queue-position cancels, multi-maker partial fills, wide-range summary scans (>4096 ticks), word-boundary straddles, pool-exhaustion invariants, market `filled_out` semantics, 5k-op reconciliation |
 | `tests/test_differential_fuzz.cpp` | 7 configs | Engine vs `StdOrderBook` parity: reject codes, filled qty, full trade streams, resting counts, final-liquidity drains — with `validate_book()` every 128 ops |
 | `tests/test_debug_aids.cpp` | 10 | Journal sequence fidelity, both latches, fault-handler plumbing, validate_book across a 2k-op scenario matrix |
-| `tests/test_std_reference.cpp` | 5 | The reference oracle itself: the `side_map_` leak regression (M-7), validation parity, market remainder, exhaustion |
-| `tests/readme_example.cpp` | 1 | The README API example, compiled verbatim (C-2 guard) |
+| `tests/test_std_reference.cpp` | 5 | The reference oracle itself: the `side_map_` leak sentinel, validation parity, market remainder, exhaustion |
+| `tests/readme_example.cpp` | 1 | The README API example, compiled verbatim (compile guard) |
 
 Counts: **111 tests in Debug/Audit**, **87 in Release** (debug-only cases
 compile out via `#if HFT_DEBUG_TOOLS`).
@@ -79,9 +79,8 @@ compile out via `#if HFT_DEBUG_TOOLS`).
   with p50/p90/p99/p99.9/max percentiles for insert / match / sweep /
   cancel / churn / mixed.
 * `hft_engine` — the 4-workload standalone benchmark (mlockall-safe).
-* `hft_sim` — 5M-event market-maker/retail/institutional simulation,
-  resurrected after the callback-contract fix (C-1); event count is a CLI
-  argument for CI smoke runs.
+* `hft_sim` — 5M-event market-maker/retail/institutional simulation; event
+  count is a CLI argument for CI smoke runs.
 
 ## 4. Script recipes (`scripts/`)
 
@@ -110,10 +109,10 @@ pipeline:
 
 `tools/mlock_gvisor_sim.c` is an `LD_PRELOAD` runtime that reproduces the
 gVisor/sandbox failure mode — `mlockall()` reports success but every future
-locked mapping fails with `ENOMEM`. Before the Round-4 fix that killed the
-engine mid-startup (`std::bad_alloc` → terminate under `-fno-exceptions`);
-the engine now probes one page right after locking and self-heals to
-pageable memory, which is exactly what this smoke asserts.
+locked mapping fails with `ENOMEM`. Left unprobed, this kills the engine
+mid-startup (`std::bad_alloc` → terminate under `-fno-exceptions`); the
+engine probes one page right after locking and self-heals to pageable
+memory, which is exactly what this smoke asserts.
 
 ### 4c. The static gate
 
@@ -129,11 +128,11 @@ plain-looking headers and dies on `namespace hft`.
 ## 5. CI (`.github/workflows/ci.yml`)
 
 * Matrix: gcc/clang × Release/Debug/**Audit**, `-Werror`, ctest-driven.
-* Engine + simulation + RDTSC smoke runs (a startup crash can never again
-  ship green — that is how the mlockall `std::bad_alloc` bug survived).
+* Engine + simulation + RDTSC smoke runs (a startup crash can never ship
+  green — that is how the mlockall `std::bad_alloc` bug survived).
 * Separate `lint` job: clang-format check + clang-tidy on `src/`.
 * The ASan `alloc_dealloc_mismatch` suppression is scoped to the
-  clang/libc++ legs only (was previously process-global — audit H-4a).
+  clang/libc++ legs only.
 
 ## 6. Fuzzing
 
@@ -155,5 +154,5 @@ cd build-cov && ./hft_tests && gcovr -r .. --branches   # branch coverage
 ```
 
 Track branch coverage specifically on `match_order_direct`,
-`update_best_*_after_remove` and `add_order` (audit §6.4) — the differential
-suite drives all of them, but the metric should be watched.
+`update_best_*_after_remove` and `add_order` — the differential suite drives
+all of them, but the metric should be watched.

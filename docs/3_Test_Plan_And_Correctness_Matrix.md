@@ -31,13 +31,13 @@ Because the engine manages custom memory layouts, the CI pipeline integrates LLV
 
 ### Stress Testing
 
-- **`AllocDeallocCycleStress`**: Exercises `MemoryPool` integrity with 1,000,000 insert+cancel cycles against a 10-slot pool, then asserts `active_order_count() == 0`, `price_level_count() == 0`, ID non-existence and that the book still accepts new orders. (Audit C-3a: the original test looped 100 times with zero assertions — the doc's claim of "1,000,000+ combinations with capacity assertions" was aspirational. The test now matches the claim; see `tests/test_ob.cpp`.)
+- **`AllocDeallocCycleStress`**: Exercises `MemoryPool` integrity with 1,000,000 insert+cancel cycles against a 10-slot pool, then asserts `active_order_count() == 0`, `price_level_count() == 0`, ID non-existence and that the book still accepts new orders (see `tests/test_ob.cpp`).
 - **`ExhaustPoolSilentDrop`**: Evaluates exhaustion handling. Upon reaching maximum active orders, asserts that new orders are safely and silently dropped without exceptions (`-fno-exceptions` safe), catching runaway Gateway feeds.
 
 ### The `libc++` Mismatch Resolution
 
 During rigorous Clang 18 testing, the AddressSanitizer emitted an `alloc-dealloc-mismatch` false positive relating to standard library exception generation (`std::logic_error` string allocations inside the LLVM libc++ layer). 
-- **The Engine Fix:** We converted the memory stress test to a controlled try-catch validation block, avoiding GTest macro exception-capturing anomalies. 
-- **The CI Fix:** We integrated `ASAN_OPTIONS=alloc_dealloc_mismatch=0` into our test suites to suppress this known LLVM/Linux exception-string false-positive, maintaining absolute integrity of our core algorithmic heap checks. 
+- **The Engine side:** the memory stress test uses a controlled try-catch validation block, avoiding GTest macro exception-capturing anomalies.
+- **The CI side:** `ASAN_OPTIONS=alloc_dealloc_mismatch=0` is set for the test suites to suppress this known LLVM/Linux exception-string false-positive, maintaining absolute integrity of our core algorithmic heap checks.
 
 **Conclusion (scoped per build flavor):** Debug and Audit builds guarantee double-free and wild-free detection via slot state stamps (`MemoryPool` faults), bounds-check all physical inputs, and verify internal consistency via `validate_book()`. Pure Release builds trust caller invariants by design (zero-overhead contract) — run the Audit flavor in CI before shipping a Release binary. AddressSanitizer/LeakSanitizer runs over the full 111-test suite report zero leaks and zero memory errors (see `verification/ALL_TEST_RESULTS.txt`).

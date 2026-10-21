@@ -6,7 +6,7 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
 # ══════════════════════════════════════════════════════════════════
-# Build flavors (audit H-3: formalize Debug / Audit / Release)
+# Build flavors: Debug / Audit / Release
 #
 #   Debug   (-DCMAKE_BUILD_TYPE=Debug)  : -O0 -g, ASan+UBSan, full
 #          instrumentation (HFT_DEBUG_TOOLS via !NDEBUG), exceptions on.
@@ -16,9 +16,9 @@ set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 #   Release (-DCMAKE_BUILD_TYPE=Release): -O3, -fno-exceptions -fno-rtti,
 #          ZERO instrumentation (documented-trust fast path).
 #
-# The old configuration had a semantic cliff: debug-only diagnostics that
-# `throw`, compiled into flavors built with -fno-exceptions, and an
-# HFT_AUDIT_MODE macro that no build type ever defined (dead configuration).
+# Each flavor is internally consistent: the diagnostics that throw are only
+# built where exceptions are enabled, and HFT_AUDIT_MODE is a real build
+# type rather than dead configuration.
 # ══════════════════════════════════════════════════════════════════
 set(CMAKE_CXX_FLAGS_AUDIT "-O2 -g -DNDEBUG -DHFT_AUDIT_MODE -fno-omit-frame-pointer"
     CACHE STRING "Flags used by the C++ compiler during Audit builds." FORCE)
@@ -27,7 +27,7 @@ if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
     add_compile_options(-Wall -Wextra -Wpedantic)
 
     # Release: maximum optimization for HFT-grade performance.
-    # Hardening (audit M-4): -fstack-protector-strong costs one guard
+    # Hardening: -fstack-protector-strong costs one guard
     # load/store per outlined function and inlined hot-path code pays nothing.
     set(CMAKE_CXX_FLAGS_RELEASE "${CMAKE_CXX_FLAGS_RELEASE} -O3 -fno-rtti -fno-exceptions -fmerge-all-constants -fno-math-errno -funroll-loops -falign-functions=32 -falign-loops=32 -ftree-vectorize -fstack-protector-strong")
     # _FORTIFY_SOURCE needs optimization to be effective; enable at -O2+.
@@ -50,7 +50,7 @@ if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
         add_link_options($<$<CONFIG:Debug>:-fsanitize=undefined>)
     endif()
 
-    # -march=native (audit L-9): great for local profiling, non-reproducible
+    # -march=native: great for local profiling, non-reproducible
     # for shipped artifacts. Option, default OFF; CI stays baseline.
     option(HFT_MARCH_NATIVE "Build with -march=native (non-portable binaries)" OFF)
     if(HFT_MARCH_NATIVE)
@@ -68,7 +68,7 @@ if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
         add_link_options(--coverage)
     endif()
 elseif(MSVC)
-    # audit M-4: /GS- (stack cookie DISABLED) removed — no benchmarked
+    # /GS (stack cookie) stays on — no benchmarked
     # reason to ship without stack protection.
     set(CMAKE_CXX_FLAGS_RELEASE "${CMAKE_CXX_FLAGS_RELEASE} /O2 /Oi /GL /arch:AVX2 /GS")
     set(CMAKE_CXX_FLAGS_DEBUG "${CMAKE_CXX_FLAGS_DEBUG} /Od /Zi /fsanitize=address")
@@ -76,7 +76,7 @@ endif()
 
 # ══════════════════════════════════════════════════════════════════
 # Dependencies — pinned to commit SHAs for reproducible/offline builds
-# (audit L-8: mutable tag floats were a supply-chain risk).
+# (mutable tag floats were a supply-chain risk).
 # ══════════════════════════════════════════════════════════════════
 include(FetchContent)
 
@@ -97,8 +97,7 @@ set(BENCHMARK_ENABLE_WERROR OFF CACHE BOOL "" FORCE)
 set(BENCHMARK_ENABLE_GTEST_TESTS OFF CACHE BOOL "" FORCE)
 
 # Only pull googlebenchmark when a target actually needs it (Debug builds
-# skip benchmarks entirely — sanitizer-instrumented timings are meaningless;
-# audit M-6).
+# skip benchmarks entirely — sanitizer-instrumented timings are meaningless).
 set(HFT_NEED_BENCHMARK OFF)
 if(NOT CMAKE_BUILD_TYPE STREQUAL "Debug")
     set(HFT_NEED_BENCHMARK ON)
@@ -111,8 +110,8 @@ else()
 endif()
 
 # ══════════════════════════════════════════════════════════════════
-# LTO / IPO — Release-like flavors only (audit M-6: the old directory-wide
-# setting also LTO'd the sanitizer Debug build, slowing it for no benefit).
+# LTO / IPO — Release-like flavors only (a directory-wide setting would also
+# LTO the sanitizer Debug build, slowing it for no benefit).
 # ══════════════════════════════════════════════════════════════════
 if(NOT MINGW AND NOT CMAKE_BUILD_TYPE STREQUAL "Debug")
     include(CheckIPOSupported)
@@ -131,12 +130,12 @@ endif()
 # Targets
 # ══════════════════════════════════════════════════════════════════
 
-# Main executable (CI smoke-runs it — audit H-4/U-14: it used to be built
-# but never executed, so the mlockall crash shipped green).
+# Main executable (CI smoke-runs it — a crash here must never ship green).
 add_executable(hft_engine src/main.cpp src/OrderBook.cpp)
 
-# Complete test suite: original cases (test_ob.cpp, hardened) + the four
-# audit-delivered suites + reference tests + the README compile-guard.
+# Complete test suite: core cases (test_ob.cpp) + the memory-pool, price-level,
+# correctness, differential-fuzz, debug-aids and reference suites + the
+# README compile-guard.
 enable_testing()
 add_executable(hft_tests
     tests/test_ob.cpp
@@ -157,20 +156,19 @@ add_test(NAME hft_tests COMMAND hft_tests)
 # anywhere, reports p50/p90/p99/p99.9/max cycle latencies and CPI estimate).
 add_executable(hft_rdtsc_bench tools/rdtsc_bench.cpp src/OrderBook.cpp)
 
-# Real-world simulation (audit C-1: was orphaned — did not compile and had
-# no CMake target, so CI never noticed).
+# Real-world simulation.
 add_executable(hft_sim tests/real_world_sim.cpp src/OrderBook.cpp)
 target_include_directories(hft_sim PRIVATE tests)
 # 200k events by default in CTest smoke; pass HFT_SIM_EVENTS to override.
 
-# Benchmarks: Release-like flavors only (audit M-6).
+# Benchmarks: Release-like flavors only.
 if(HFT_NEED_BENCHMARK)
     add_executable(hft_bench tests/benchmark_ob.cpp src/OrderBook.cpp)
     target_include_directories(hft_bench PRIVATE tests)
     target_link_libraries(hft_bench benchmark::benchmark)
 endif()
 
-# Optional continuous fuzzing target (clang + libFuzzer only; audit §9.5).
+# Optional continuous fuzzing target (clang + libFuzzer only).
 option(HFT_ENABLE_FUZZING "Build the libFuzzer differential core (requires clang)" OFF)
 if(HFT_ENABLE_FUZZING)
     if(CMAKE_CXX_COMPILER_ID MATCHES "Clang")

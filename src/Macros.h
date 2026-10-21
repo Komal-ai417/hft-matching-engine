@@ -85,11 +85,8 @@ namespace hft {
 
 }  // namespace hft
 
-// NOTE (audit L-3 / M-9): HFT_ASSUME and HFT_VERIFY were deleted.
-//  - HFT_ASSUME's release form expanded to __builtin_unreachable(), i.e. it
-//    converted a false assumption into immediate undefined behavior. It had
-//    zero call sites; a reusable header must not ship that footgun.
-//  - HFT_VERIFY's `return;` semantics would silently break value-returning
-//    functions if ever used. Zero call sites.
-// Guarded preconditions now use explicit early-returns with RejectReason
-// values (see OrderBook::add_order) — no UB, fully testable.
+// Preconditions are guarded with explicit early-returns carrying a
+// RejectReason (see OrderBook::add_order) — no UB, fully testable. Assume/verify
+// style macros are deliberately absent: an assume expands to
+// __builtin_unreachable() in release builds, and a verify whose semantics are
+// `return;` silently breaks value-returning functions.

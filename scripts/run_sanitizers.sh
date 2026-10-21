@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # ============================================================================
 # run_sanitizers.sh — build & run the full test suite under every sanitizer
-# flavor available on this host (audit §8.8 external tooling recipes).
+# flavor available on this host.
 #   1. Debug      (ASan + UBSan)   — memory errors + UB
 #   2. Debug-UB   (UBSan only)     — faster UB-focused pass
 #   3. Audit      (instrumented -O2, no sanitizers) — optimized-canary pass

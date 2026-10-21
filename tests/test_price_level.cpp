@@ -1,6 +1,5 @@
 // ============================================================================
-// PriceLevel unit tests (audit M-5/U-4: previously ZERO direct tests for a
-// core engine component). Covers: append semantics (first/FIFO/totals/links),
+// PriceLevel unit tests. Covers: append semantics (first/FIFO/totals/links),
 // remove semantics (head/middle/tail/sole), emptiness, the debug canary,
 // layout static_asserts, and a 2,000-op shadow-model property test that
 // verifies totals, count, FIFO content and BOTH link directions throughout.

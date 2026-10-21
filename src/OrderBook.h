@@ -6,13 +6,13 @@
 #include <cassert>
 #include <vector>
 
-#include "Journal.h"  // audit §8.4: lifecycle tracking (Debug/Audit only)
-#include "Macros.h"   // audit L-4: was included mid-file after struct Trade — moved to the top
+#include "Journal.h"  // lifecycle tracking (Debug/Audit only)
+#include "Macros.h"
 #include "MemoryPool.h"
 #include "Order.h"
 #include "PriceLevel.h"
 #if HFT_DEBUG_TOOLS
-#include <thread>  // audit M-8: thread-identity latch
+#include <thread>  // thread-identity latch
 #endif
 
 namespace hft {
@@ -25,8 +25,8 @@ enum class RejectReason : uint8_t {
     OutOfBoundsPrice,
     CancelFailed,
     PoolExhausted,
-    MarketOnEmptyBook,  ///< audit report #2 §2.2: market order against an empty opposite side (was silently Accepted).
-    ReentrancyBlocked   ///< audit H-2/M-8: debug latch (re-entrancy or cross-thread call) blocked the operation.
+    MarketOnEmptyBook,  ///< market order against an empty opposite side.
+    ReentrancyBlocked   ///< debug latch (re-entrancy or cross-thread call) blocked the operation.
 };
 
 struct Trade {
@@ -98,18 +98,18 @@ inline constexpr size_t kFaultMessageBytes = 128;            // latch-fault mess
  * @brief Price-time-priority limit order book with O(1) price-level access,
  * two-level bitset best-price tracking and a zero-allocation memory pool.
  *
- * THREAD SAFETY CONTRACT (audit M-8): this class is SINGLE-THREADED. All
+ * THREAD SAFETY CONTRACT: this class is SINGLE-THREADED. All
  * public entry points must be called from the constructing thread. Debug and
  * Audit builds enforce this (thread-identity latch) and also enforce the
  * re-entrancy contract below; Release trusts both by design.
  *
- * RE-ENTRANCY CONTRACT (audit H-2): trade callbacks MUST NOT call add_order
+ * RE-ENTRANCY CONTRACT: trade callbacks MUST NOT call add_order
  * or cancel_order on the same OrderBook instance, directly or indirectly.
  * The matching loops cache raw pointers into pool storage; a nested mutation
  * invalidates them. Debug/Audit builds turn violations into an immediate,
  * diagnosable fault instead of silent corruption.
  *
- * COPY SEMANTICS (audit M-6 / L-2): copying is deleted — two books sharing
+ * COPY SEMANTICS: copying is deleted — two books sharing
  * one order-ID space is a logic error in a trading system. Moving is allowed
  * (vector relocation keeps all pool indices valid).
  */
@@ -119,7 +119,7 @@ class OrderBook {
     OrderBook(size_t max_orders, Price min_price, Price max_price)
         : OrderBook(max_orders, max_orders, min_price, max_price) {}
 
-    OrderBook(const OrderBook&) = delete;  // audit M-6: two books sharing an ID space is a logic error
+    OrderBook(const OrderBook&) = delete;  // two books sharing an ID space is a logic error
     OrderBook& operator=(const OrderBook&) = delete;
     OrderBook(OrderBook&&) noexcept = default;  // vectors relocate wholesale — indices stay valid
     OrderBook& operator=(OrderBook&&) noexcept = default;
@@ -129,8 +129,8 @@ class OrderBook {
      * @brief Adds an order to the book (Limit/Market) or cancels one (Cancel).
      * @param on_trade  Callback invoked per fill. Must be noexcept (static_assert).
      * @param filled_out Optional out-parameter: how much of `quantity` actually
-     *        traded (audit M-3 — previously a partially-filled market order was
-     *        indistinguishable from a full fill; callers had to sum callbacks).
+     *        traded, so a partial fill is distinguishable from a full fill
+     *        without summing the callbacks.
      *
      * WARNING: Trade callbacks MUST NOT be re-entrant. You cannot call add_order or
      * cancel_order from within the on_trade callback on the same OrderBook instance.
@@ -144,9 +144,7 @@ class OrderBook {
     [[nodiscard]] HFT_ENGINE_INLINE RejectReason cancel_order(OrderId id);
 
     // ────────────────────────────────────────────────────────────────
-    // Introspection API (audit M-6: previously absent — white-box tests
-    // had to be compiled with -fno-access-control to inspect state).
-    // All of these are cheap and available in every build flavor.
+    // Introspection API — cheap accessors available in every build flavor.
     // ────────────────────────────────────────────────────────────────
     [[nodiscard]] bool has_bids() const noexcept { return has_bids_; }
     [[nodiscard]] bool has_asks() const noexcept { return has_asks_; }
@@ -189,7 +187,7 @@ class OrderBook {
     }
 
 #if HFT_DEBUG_TOOLS
-    /// Cross-structural invariant checker (audit §8.5). Verifies, in order:
+    /// Cross-structural invariant checker. Verifies, in order:
     ///  1. per-level totals vs walked sums; level canaries intact
     ///  2. intrusive links bidirectional; head->prev / tail->next INVALID
     ///  3. every level-referenced slot is pool-live and order_map back-resolves
@@ -201,7 +199,7 @@ class OrderBook {
     /// Returns true when every invariant holds; prints the first failure(s).
     [[nodiscard]] bool validate_book() const;
 
-    /// Direct access to the lifecycle journal (audit §8.4).
+    /// Direct access to the lifecycle journal.
     [[nodiscard]] const Journal& journal() const noexcept { return journal_; }
     Journal& journal() noexcept { return journal_; }
 #endif
@@ -220,8 +218,8 @@ class OrderBook {
     HFT_ENGINE_INLINE void update_best_bid_after_remove(Price removed_price);
     HFT_ENGINE_INLINE void update_best_ask_after_remove(Price removed_price);
 
-    /// Deterministic per-page write used when madvise/VirtualLock pre-touch
-    /// fails (audit M-2/M-9) — faults pages HERE, never mid-trade.
+    /// Deterministic per-page read used when madvise/VirtualLock pre-touch
+    /// fails — faults pages HERE, never mid-trade.
     static void touch_fallback(void* base, size_t bytes) noexcept;
 
 #if HFT_DEBUG_TOOLS
@@ -255,7 +253,7 @@ class OrderBook {
     Price max_price_;
     size_t max_order_id_;
 
-    // Sentinel semantics (audit M-5 / M-4a): when a side is empty, the PRICE
+    // Sentinel semantics: when a side is empty, the PRICE
     // sentinel is best_ask_ = max_price_+1 (safe: the constructor aborts on
     // max_price == UINT32_MAX, and every read is gated by has_asks_) or
     // best_bid_ = 0 (gated by has_bids_). The INDEX sentinels are always
@@ -310,7 +308,7 @@ HFT_ENGINE_INLINE void OrderBook::match_order_direct(
     TradeCallback&&
         on_trade) {  // NOLINT(cppcoreguidelines-missing-std-forward): the callback is invoked (often many times) as an
                      // lvalue — forwarding would double-move move-only callbacks on the second fill
-    // Enforce noexcept contract on trade callback (B-6).
+    // Enforce noexcept contract on trade callback.
     // If the callback throws after partial matching, the book is left in an
     // inconsistent state with no recovery path.
     static_assert(noexcept(std::declval<TradeCallback>()(std::declval<const Trade&>())),
@@ -319,9 +317,6 @@ HFT_ENGINE_INLINE void OrderBook::match_order_direct(
     Order* const pool_data = order_pool_.data();
     uint32_t* const order_map_ptr = order_map_.data();
     const size_t asks_summary_size = asks_summary_.size();
-    // NOTE (audit M-1): `bids_summary_size` was captured here and never used —
-    // the bid-side downward scan is bounded by i >= 0 and needs no size guard.
-    // Deleted (it was the repo's only -Wextra warning).
 
     if constexpr (side == Side::Buy) {
         PriceLevel* const asks_levels_ptr = asks_levels_.data();
@@ -384,8 +379,7 @@ HFT_ENGINE_INLINE void OrderBook::match_order_direct(
                 // ── Slow path: partial fill within this level ──
                 // INVARIANT: taker_quantity < level.total_quantity on entry, so
                 // the level always retains a positive quantity here — the loop
-                // can never drain it (audit M-4d). The old `else level.tail =
-                // INVALID_INDEX` branch was mathematically dead and is removed.
+                // can never drain it.
                 uint32_t maker_order_idx = level.head;
                 if (maker_order_idx != INVALID_INDEX) HFT_PREFETCH(&order_map_ptr[pool_data[maker_order_idx].id], 1, 3);
                 while (maker_order_idx != INVALID_INDEX && taker_quantity > 0) {
@@ -447,9 +441,8 @@ HFT_ENGINE_INLINE void OrderBook::match_order_direct(
                         best_ask_ = min_price_ + best_ask_idx_;
                     } else {
                         has_asks_ = false;
-                        best_ask_ = max_price_ + 1;  // price sentinel (guarded by has_asks_)
-                        best_ask_idx_ =
-                            asks_levels_.size() - 1;  // audit M-5: keep index in-range (stale, never dereferenced)
+                        best_ask_ = max_price_ + 1;               // price sentinel (guarded by has_asks_)
+                        best_ask_idx_ = asks_levels_.size() - 1;  // keep index in-range (stale, never dereferenced)
                         uint64_t summary_idx = word_idx / detail::kWordBits;
                         uint64_t k = word_idx % detail::kWordBits;
                         uint64_t summary_mask = ~((((1ULL << k) - 1) << 1) | 1);
@@ -539,7 +532,7 @@ HFT_ENGINE_INLINE void OrderBook::match_order_direct(
                 level.order_count = 0;
             } else {
                 // ── Slow path: partial fill within this level ──
-                // (dead tail branch removed — see the Buy-side proof comment)
+                // (see the Buy-side proof comment)
                 uint32_t maker_order_idx = level.head;
                 if (maker_order_idx != INVALID_INDEX) HFT_PREFETCH(&order_map_ptr[pool_data[maker_order_idx].id], 1, 3);
                 while (maker_order_idx != INVALID_INDEX && taker_quantity > 0) {
@@ -600,7 +593,7 @@ HFT_ENGINE_INLINE void OrderBook::match_order_direct(
                     } else {
                         has_bids_ = false;
                         best_bid_ = 0;      // price sentinel (guarded by has_bids_)
-                        best_bid_idx_ = 0;  // audit M-5: valid (stale) index — never dereferenced
+                        best_bid_idx_ = 0;  // valid (stale) index — never dereferenced
                         uint64_t summary_idx = word_idx / detail::kWordBits;
                         uint64_t summary_mask = (1ULL << (word_idx % detail::kWordBits)) - 1;
                         uint64_t summary_word = bids_summary_ptr[summary_idx] & summary_mask;
@@ -675,7 +668,7 @@ HFT_ENGINE_INLINE void OrderBook::update_best_ask_after_remove(Price removed_pri
     }
     has_asks_ = false;
     best_ask_ = max_price_ + 1;
-    best_ask_idx_ = asks_levels_.size() - 1;  // audit M-4a: valid index; was one-past-the-end
+    best_ask_idx_ = asks_levels_.size() - 1;  // valid index (never dereferenced)
 }
 
 HFT_ENGINE_INLINE void OrderBook::update_best_bid_after_remove(Price removed_price) {
@@ -690,9 +683,9 @@ HFT_ENGINE_INLINE void OrderBook::update_best_bid_after_remove(Price removed_pri
     if (word != 0) {
         best_bid_idx_ = word_idx * detail::kWordBits + detail::kTopBitIndex - std::countl_zero(word);
         best_bid_ = min_price_ + best_bid_idx_;
-        // audit M-4c: has_bids_ = true was missing here — the function's
-        // precondition guarantees it, but state assignment should be locally
-        // complete so a future refactor cannot break the invariant silently.
+        // The precondition guarantees has_bids_, but setting it here keeps the
+        // state assignment locally complete so a future refactor cannot break
+        // the invariant silently.
         has_bids_ = true;
         return;
     }
@@ -707,7 +700,7 @@ HFT_ENGINE_INLINE void OrderBook::update_best_bid_after_remove(Price removed_pri
         best_bid_idx_ =
             next_word_idx * detail::kWordBits + detail::kTopBitIndex - std::countl_zero(bids_bitset_ptr[next_word_idx]);
         best_bid_ = min_price_ + best_bid_idx_;
-        has_bids_ = true;  // audit M-4c
+        has_bids_ = true;
         return;
     }
 
@@ -717,13 +710,13 @@ HFT_ENGINE_INLINE void OrderBook::update_best_bid_after_remove(Price removed_pri
             best_bid_idx_ = next_word_idx * detail::kWordBits + detail::kTopBitIndex -
                             std::countl_zero(bids_bitset_ptr[next_word_idx]);
             best_bid_ = min_price_ + best_bid_idx_;
-            has_bids_ = true;  // audit M-4c
+            has_bids_ = true;
             return;
         }
     }
     has_bids_ = false;
     best_bid_ = 0;
-    best_bid_idx_ = 0;  // audit M-4a: valid index
+    best_bid_idx_ = 0;  // valid index (never dereferenced)
 }
 
 [[nodiscard]] HFT_ENGINE_INLINE RejectReason OrderBook::cancel_order(OrderId id) {
@@ -784,9 +777,8 @@ HFT_ENGINE_INLINE RejectReason OrderBook::cancel_order_impl(OrderId id) {
             if (asks_bitset_ptr[word_offset] == 0) {
                 asks_summary_.data()[word_offset / detail::kWordBits] &= ~(1ULL << (word_offset % detail::kWordBits));
             }
-            // audit M-4b: `has_asks_ &&` guard was missing on the ask side (the
-            // bid side had it) — safe only because the empty sentinel
-            // max_price_+1 can never equal a valid price. Normalized.
+            // Mirrors the bid side's `has_asks_ &&` guard; the empty sentinel
+            // max_price_+1 can never equal a valid price.
             if (has_asks_ && best_ask_ == price) {
                 update_best_ask_after_remove(price);
             }
@@ -857,9 +849,9 @@ template<typename TradeCallback>
         }
     }
 
-    // audit report #2 §2.2: a Market order against a completely empty opposite
-    // side used to return Accepted with the quantity silently discarded — in a
-    // real venue that is a critical failure. Reject it explicitly.
+    // A Market order against a completely empty opposite side is rejected:
+    // accepting it would silently discard the quantity, which is a critical
+    // failure in a real venue.
     if (type == OrderType::Market) {
         const bool opposite_empty = (side == Side::Buy) ? !has_asks_ : !has_bids_;
         if (HFT_UNLIKELY(opposite_empty)) {
@@ -882,13 +874,13 @@ template<typename TradeCallback>
         match_order_direct<Side::Sell>(id, resolved_price, remaining_qty, std::forward<TradeCallback>(on_trade));
     }
 
-    // audit M-3: surface the filled quantity to the caller.
+    // Surface the filled quantity to the caller.
     if (filled_out) *filled_out = quantity - remaining_qty;
 
     if (remaining_qty > 0) {
         if (type == OrderType::Market) {
-            // IOC semantics: the unmatched market remainder is discarded (now
-            // *visibly* — callers read filled_out instead of summing callbacks).
+            // IOC semantics: the unmatched market remainder is discarded —
+            // callers read filled_out instead of summing callbacks.
         } else {
             uint32_t order_idx = order_pool_.allocate();
             if (HFT_UNLIKELY(order_idx == INVALID_INDEX)) {

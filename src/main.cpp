@@ -1,7 +1,7 @@
 // main.cpp — the hft_engine smoke/benchmark binary.
 //
 // ============================================================================
-// MEMORY-LOCKING POLICY (audit C-1 + Round-4 self-heal)
+// MEMORY-LOCKING POLICY
 // ----------------------------------------------------------------------------
 //  1. HFT_DISABLE_MLOCKALL=1  -> skip locking entirely (pageable).
 //  2. HFT_MADVISE_ONLY=1      -> skip mlockall; pools still pre-fault via
@@ -10,8 +10,8 @@
 //  3. Otherwise: raise RLIMIT_MEMLOCK (best effort; a warning is non-fatal),
 //     mlockall(MCL_CURRENT|MCL_FUTURE), then PROBE one fresh anonymous page.
 //     Some runtimes (gVisor, certain sandboxes/containers) report mlockall
-//     success but fail every future locked mapping with ENOMEM — historically
-//     that aborted the engine mid-startup (bad_alloc -> terminate under
+//     success but fail every future locked mapping with ENOMEM — which would
+//     abort the engine mid-startup (bad_alloc -> terminate under
 //     -fno-exceptions). The probe detects the condition up front; the engine
 //     then munlockall()s and self-heals to pageable memory with a warning
 //     instead of dying. Reproduce anytime with:
@@ -116,8 +116,8 @@ LockMode prepare_memory_locking() noexcept {
     if (!locked_alloc_probe_ok()) {
         // gVisor-style runtime: mlockall "succeeded" but locked allocations
         // fail. Self-heal: drop MCL_FUTURE before the pools reserve their
-        // storage, then continue pageable (Round-4 fix — the old behavior
-        // was bad_alloc -> std::terminate under -fno-exceptions).
+        // storage, then continue pageable — otherwise the pool reservation
+        // fails with bad_alloc -> std::terminate under -fno-exceptions.
         munlockall();
         std::fprintf(stderr,
                      "[hft] mlockall succeeded but locked allocations fail on this runtime "
@@ -181,8 +181,8 @@ int main() {
 
     // -------------------------------------------------------
     // Benchmark 1: Pure Insertion (no matching)
-    // NOTE (audit L-10): all orders rest across kWarmupSpread price points —
-    // this measures the allocator + level-append path on a wide-but-shallow
+    // NOTE: all orders rest across kWarmupSpread price points — this
+    // measures the allocator + level-append path on a wide-but-shallow
     // book shape, NOT a realistic market-mixed book. See hft_bench.
     // -------------------------------------------------------
     {

@@ -1,10 +1,10 @@
 #!/usr/bin/env bash
 # ============================================================================
-# run_static.sh — static analysis sweep (audit L-1 / M-9a / H-4b / §8.8).
+# run_static.sh — static analysis sweep.
 # Degrades gracefully when a tool is missing. Checks:
 #   1. header self-containment (every header must compile alone)
 #   2. zero-warning build (-Wall -Wextra -Wpedantic, Release + Debug shapes)
-#   3. cppcheck (--language=c++ — Round-5: without the flag cppcheck 2.13
+#   3. cppcheck (--language=c++ — without the flag cppcheck 2.13
 #      guesses "C" for plain-looking headers such as Macros.h/Order.h and
 #      dies with "Code 'namespacehft{' is invalid C code" [syntaxError])
 #   4. clang-tidy (strict gate: WarningsAsErrors comes from .clang-tidy;
@@ -15,7 +15,7 @@ set -u
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 fail=0
 
-echo "[*] 1/4 Header self-containment (audit L-1)"
+echo "[*] 1/4 Header self-containment"
 for h in "$ROOT"/src/*.h; do
     base="$(basename "$h")"
     printf '#include "%s"\nint main() { return 0; }\n' "$base" > /tmp/hft_hdr_check.cpp
@@ -28,7 +28,7 @@ for h in "$ROOT"/src/*.h; do
     fi
 done
 
-echo "[*] 2/4 Zero-warning build (-Wall -Wextra -Wpedantic, audit M-9a)"
+echo "[*] 2/4 Zero-warning build (-Wall -Wextra -Wpedantic)"
 printf '#include "src/OrderBook.h"\nint main() { return 0; }\n' > /tmp/hft_warn_check.cpp
 : > /tmp/hft_warn.log
 if g++ -std=c++20 -Wall -Wextra -Wpedantic -O2 -DNDEBUG -I"$ROOT" -fsyntax-only /tmp/hft_warn_check.cpp 2>>/tmp/hft_warn.log \
@@ -48,10 +48,10 @@ fi
 
 echo "[*] 3/4 cppcheck"
 if command -v cppcheck >/dev/null 2>&1; then
-    # --language=c++ is REQUIRED (Round-5): without it cppcheck parses
-    # .h files by heuristic, treats Macros.h/Order.h as C, and aborts on
-    # `namespace hft {` with a syntaxError. The flag is a no-op on hosts
-    # whose cppcheck guesses correctly.
+    # --language=c++ is REQUIRED: without it cppcheck parses .h files by
+    # heuristic, treats Macros.h/Order.h as C, and aborts on `namespace hft {`
+    # with a syntaxError. The flag is a no-op on hosts whose cppcheck guesses
+    # correctly.
     if cppcheck --enable=warning,portability,performance --std=c++20 --language=c++ \
         --inline-suppr -I"$ROOT/src" "$ROOT"/src/*.cpp "$ROOT"/src/*.h 2>/tmp/hft_cppcheck.log >/dev/null; then
         echo "[OK] cppcheck clean"

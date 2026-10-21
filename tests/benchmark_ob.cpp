@@ -34,10 +34,9 @@ BENCHMARK_TEMPLATE(BM_AddOrder_NoMatch, StdOrderBook);
 
 // ============================================================
 // 2. Continuous match against a deep book
-//    (audit L-10: name and comment now say what this actually measures —
-//    each iteration adds one resting sell and immediately consumes the
+//    Each iteration adds one resting sell and immediately consumes the
 //    whole best level with a crossing buy; 5000 price levels are resident,
-//    stressing the cache hierarchy and both bitset directions.)
+//    stressing the cache hierarchy and both bitset directions.
 //    Tests: bitset best-price scan vs std::map tree walk,
 //           pool dealloc vs heap free, array lookup vs hash
 // ============================================================
@@ -277,7 +276,7 @@ BENCHMARK_TEMPLATE(BM_MixedWorkload, OrderBook);
 BENCHMARK_TEMPLATE(BM_MixedWorkload, StdOrderBook);
 
 // ============================================================
-// 10. The "Churn" Test (audit report #2 §7) — fragmentation stress.
+// 10. The "Churn" Test — fragmentation stress.
 //     Setup: 100k orders across random prices; cancel a random 50k.
 //     Measured: the next 10k adds on the maximally-fragmented free list.
 //     Why: verifies the pool's LIFO free-list traversal under realistic

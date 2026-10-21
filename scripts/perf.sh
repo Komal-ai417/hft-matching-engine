@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # ============================================================================
-# perf.sh — hardware-counter profiling recipes (audit §8.8, docs/1).
+# perf.sh — hardware-counter profiling recipes (docs/1).
 # Degrades gracefully without perf or permissions. Produces:
 #   1. perf stat overview of the RDTSC harness (IPC, cache + branch misses)
 #   2. perf record/report of the benchmark suite (call-graph attribution)

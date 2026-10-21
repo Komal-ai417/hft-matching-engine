@@ -12,20 +12,16 @@
 namespace hft {
 
 /// A deliberately standard-library-based order book for benchmarking AND as
-/// the differential-testing oracle (audit H-5).
+/// the differential-testing oracle.
 ///
-/// AUDIT FIXES in this file:
-///  * M-7: the buy-side fill loop erased order_map_ but NOT side_map_ — a
-///    slow leak that inflated the reference's memory footprint and quietly
-///    flattered the engine's memory benchmark ratios. Mirrored the sell side.
-///  * H-5:  the reference now performs the SAME input validation as the
-///    engine (zero qty, id bounds, duplicate id, price bounds, market-on-
-///    empty-book, filled-quantity out-param), so the differential fuzzer can
-///    feed it arbitrary streams — previously it accepted everything, so the
-///    fuzzer had to generate only in-range values and could never certify
-///    rejection paths.
-///  * The trade callback now carries the same noexcept static_assert as the
-///    engine, so the oracle cannot drift from the enforced contract.
+/// It mirrors the engine's contract exactly, so the differential fuzzer can
+/// feed it arbitrary operation streams:
+///  * the same input validation as the engine (zero qty, id bounds, duplicate
+///    id, price bounds, market-on-empty-book, filled-quantity out-param);
+///  * the same noexcept static_assert on the trade callback;
+///  * the same side-map bookkeeping — a fully-filled maker is erased from
+///    BOTH order_map_ and side_map_, so the reference's memory footprint
+///    does not drift from the engine's.
 struct StdOrder {
     OrderId id;
     Price price;
@@ -61,7 +57,7 @@ class StdOrderBook {
 
         if (quantity == 0) return RejectReason::InvalidQuantity;
 
-        // Engine-parity validation (audit H-5 fix).
+        // Engine-parity validation.
         if (id == 0 || id > max_order_id_) return RejectReason::OutOfBoundsOrderId;
         if (order_map_.find(id) != order_map_.end()) return RejectReason::DuplicateOrderId;
         if (type == OrderType::Limit && (price < min_price_ || price > max_price_)) {
@@ -69,9 +65,8 @@ class StdOrderBook {
         }
         if (type == OrderType::Market) {
             // Opposite side of a BUY is the ASKS (you buy against offers);
-            // the opposite of a SELL is the BIDS. (An earlier port inverted
-            // this — caught by the StdReference parity tests, which is exactly
-            // what they are for.)
+            // the opposite of a SELL is the BIDS. The StdReference parity
+            // tests pin this mapping.
             const bool opposite_empty = (side == Side::Buy) ? asks_.empty() : bids_.empty();
             if (opposite_empty) return RejectReason::MarketOnEmptyBook;
         }
@@ -100,9 +95,9 @@ class StdOrderBook {
                     it->quantity -= trade_qty;
 
                     if (it->quantity == 0) {
-                        // Hash table erase (triggers rehash/rebalance)
-                        // AUDIT M-7 FIX: erase side_map_ too — the sell side always did;
-                        // the missing erase here leaked one entry per fully-filled ask.
+                        // Hash table erase (triggers rehash/rebalance).
+                        // Erase side_map_ too — a missing erase here leaks one
+                        // entry per fully-filled ask.
                         order_map_.erase(it->id);
                         side_map_.erase(it->id);
                         it = level.erase(it);  // Heap deallocation of list node
@@ -197,7 +192,7 @@ class StdOrderBook {
         return RejectReason::Accepted;
     }
 
-    // ── Introspection parity with the engine (audit M-5/M-7 test needs) ──
+    // ── Introspection parity with the engine ──
     [[nodiscard]] size_t active_order_count() const noexcept { return live_count_; }
     [[nodiscard]] bool order_exists(OrderId id) const { return order_map_.find(id) != order_map_.end(); }
     [[nodiscard]] size_t side_map_size() const noexcept { return side_map_.size(); }  // leak sentinel
