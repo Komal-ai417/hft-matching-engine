@@ -1,6 +1,29 @@
 ---
-Checks:          'performance-*,bugprone-*,modernize-*,cppcoreguidelines-*,-bugprone-exception-escape,-cppcoreguidelines-pro-bounds-pointer-arithmetic,-cppcoreguidelines-pro-type-vararg,-modernize-use-trailing-return-type'
-WarningsAsErrors: 'performance-*,bugprone-*'
-HeaderFilterRegex: '.*'
-FormatStyle:     file
+# Static-analysis gate for src/ (run via scripts/run_static.sh stage 4 or CI).
+#
+# WarningsAsErrors '*' — everything enabled is a hard gate; the tree must be
+# clean, not merely "tolerated". Excluded checks below are architectural
+# decisions of this engine, documented next to the code they describe:
+#
+#  - bugprone-easily-swappable-parameters
+#      The public API is numeric by design (id/price/quantity/side on one
+#      cache-friendly call); its ordering is guarded by the differential
+#      fuzzer against StdOrderBook, not by type-system noise.
+#  - bugprone-exception-escape
+#      main()/callbacks are noexcept-audited; fault paths abort on purpose.
+#  - cppcoreguidelines-macro-usage
+#      Macros.h is the platform/instrumentation layer by design
+#      (HFT_LIKELY/HFT_PREFETCH/HFT_DEBUG_TOOLS cannot be constexpr
+#      templates portably across GCC/Clang/MSVC).
+#  - cppcoreguidelines-pro-bounds-array-to-pointer-decay and
+#    cppcoreguidelines-pro-bounds-pointer-arithmetic
+#      The pool and prefetch paths are C-interop byte-level code.
+#  - cppcoreguidelines-pro-type-vararg
+#      fprintf/snprintf are the deliberate exception-free diagnostics.
+#  - modernize-use-trailing-return-type
+#      Project style: leading return types.
+Checks: 'performance-*,bugprone-*,modernize-*,cppcoreguidelines-*,-bugprone-easily-swappable-parameters,-bugprone-exception-escape,-cppcoreguidelines-macro-usage,-cppcoreguidelines-pro-bounds-array-to-pointer-decay,-cppcoreguidelines-pro-bounds-pointer-arithmetic,-cppcoreguidelines-pro-type-vararg,-modernize-use-trailing-return-type'
+WarningsAsErrors: '*'
+HeaderFilterRegex: 'src/.*'
+FormatStyle: file
 ...

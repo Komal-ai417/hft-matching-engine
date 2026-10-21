@@ -64,16 +64,24 @@ Defined in `Order.h`. Specifies the behavior of the order.
 
 ### `enum class RejectReason : uint8_t`
 
-Defined in `OrderBook.h`. Retained for potential future use (e.g., restoring `std::expected` return types). Currently, validation failures result in silent early returns.
+Defined in `OrderBook.h`. Returned by `add_order` / `cancel_order`
+(`[[nodiscard]]`). Every validation failure maps to exactly one value.
 
 | Enumerator | Value | Trigger Condition |
 | :--- | :--- | :--- |
-| `InvalidQuantity` | `0` | `quantity == 0` for Limit or Market orders. |
-| `DuplicateOrderId` | `1` | `order_map_[id]` is not `INVALID_INDEX` (already contains an active index). |
-| `OutOfBoundsOrderId` | `2` | `id >= order_map_.size()` or `id == 0`. |
-| `OutOfBoundsPrice` | `3` | `price < min_price` or `price > max_price` for Limit orders. |
-| `CancelFailed` | `4` | `order_map_[id] == INVALID_INDEX` (order does not exist or was already filled). |
-| `PoolExhausted` | `5` | Pool exhausted, order cannot be posted. |
+| `Accepted` | `0` | Operation succeeded (fully or partially). |
+| `InvalidQuantity` | `1` | `quantity == 0` for Limit or Market orders. |
+| `DuplicateOrderId` | `2` | `order_map_[id]` is not `INVALID_INDEX` (already contains an active index). |
+| `OutOfBoundsOrderId` | `3` | `id > max_order_id` or `id == 0`. |
+| `OutOfBoundsPrice` | `4` | `price < min_price` or `price > max_price` for Limit orders. |
+| `CancelFailed` | `5` | `order_map_[id] == INVALID_INDEX` (order does not exist or was already filled). |
+| `PoolExhausted` | `6` | Pool exhausted, order cannot be posted. |
+| `MarketOnEmptyBook` | `7` | Market order against an empty opposite side (previously returned `Accepted` with the quantity silently discarded). |
+| `ReentrancyBlocked` | `8` | Debug/Audit latch (re-entrancy or foreign-thread call) blocked the operation. |
+
+> Audit fix L-2: the previous table listed the values off-by-one and claimed
+> validation failures were "silent early returns" — they never were; the
+> engine has returned `RejectReason` since the result-code hardening.
 
 ---
 

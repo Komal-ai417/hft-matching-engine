@@ -27,3 +27,14 @@ CMakeFiles/
 *.dll
 *.lib
 *.a
+
+# Build directories
+build*/
+# Verification / profiling / fuzzing artifacts
+verification/
+bench-results/
+perf-out/
+fuzz-corpus/
+
+# Full-pipeline verification output (scripts/run_all.sh)
+verify-results/

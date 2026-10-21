@@ -114,6 +114,12 @@ Orders are matched primarily on Price (highest bid vs lowest ask), and secondari
 
 ## API
 
+Trade callbacks must be `noexcept` — enforced by a `static_assert`, because a
+throwing callback would leave the book inconsistent mid-match. `add_order` is
+`[[nodiscard]]` and returns a `RejectReason`; the optional trailing
+`filled_out` parameter reports how much of the quantity actually traded
+(market-order remainders are discarded, IOC-style — now *visibly*).
+
 ```cpp
 #include "OrderBook.h"
 #include <iostream>
@@ -121,17 +127,28 @@ Orders are matched primarily on Price (highest bid vs lowest ask), and secondari
 // Pre-allocate for max 1M order IDs, max 1M active resting orders, and set price bounds (min_price=0, max_price=20000)
 hft::OrderBook ob(1'000'000, 1'000'000, 0, 20000);
 
-// Submit a limit order with a callback lambda for trades
-ob.add_order(
+// Submit a limit order with a noexcept callback for trades
+hft::RejectReason r = ob.add_order(
     1, hft::OrderType::Limit, 10050, 100, hft::Side::Buy,
-    [](const hft::Trade& trade) {
+    [](const hft::Trade& trade) noexcept {
         std::cout << "Trade! " << trade.quantity << " @ " << trade.price << "\n";
     }
 );
 
+// Optional out-param: how much actually filled
+hft::Quantity filled = 0;
+ob.add_order(2, hft::OrderType::Market, 0, 50, hft::Side::Buy,
+             [](const hft::Trade&) noexcept {}, &filled);
+
 // Cancel an order
 ob.cancel_order(1);
 ```
+
+The full contract — including the single-thread and no-re-entrancy rules,
+both enforced by Debug/Audit latches — is in
+[docs/4_API_Reference.md](docs/4_API_Reference.md). This example is compiled
+verbatim as a regression test (`tests/readme_example.cpp`), so documentation
+can no longer drift from the enforced API.
 
 ## Build Instructions
 
@@ -157,17 +174,67 @@ cmake -B build-debug -DCMAKE_BUILD_TYPE=Debug
 cmake --build build-debug --config Debug -j$(nproc)
 ```
 
+### Building (Audit — instrumented, optimized)
+
+The Audit flavor runs the full debugging-aids suite — slot state canaries,
+0xDD/0xDE poison patterns, generation stamps, allocation tracking, the order
+lifecycle journal, re-entrancy/thread latches and `validate_book()` — at
+`-O2`, so memory-safety verification happens on optimized code:
+
+```bash
+cmake -B build-audit -DCMAKE_BUILD_TYPE=Audit
+cmake --build build-audit -j$(nproc)
+```
+
+See [docs/5_Test_Infrastructure.md](docs/5_Test_Infrastructure.md) for the
+flavor matrix and the tooling recipes (sanitizers, Valgrind,
+clang-tidy/cppcheck, perf/FlameGraph, libFuzzer, benchmark matrix).
+
+### One-Command Verification (recommended)
+
+`scripts/run_all.sh` is the end-to-end pipeline: it builds **all five
+flavors** (Debug, Audit, Release, UBSan, LSan), runs the full test suite in
+each, differential-fuzz sweeps, libFuzzer, Valgrind (suite + engine), the
+strict static gate (cppcheck + clang-tidy, warnings-as-errors), the
+42-scenario benchmark suite, the RDTSC harness, the 1M-event simulation and
+the 4-path engine smoke matrix — then writes a per-phase log bundle and
+`summary.txt` into `verify-results/<UTC-timestamp>/`:
+
+```bash
+./scripts/run_all.sh          # full run (~10-20 min depending on host)
+FAST=1 ./scripts/run_all.sh  # quick mode (shorter fuzz/bench/sim)
+JOBS=8 ./scripts/run_all.sh  # control build parallelism
+cat verify-results/*/summary.txt
+```
+
+The exit code is the number of failed phases. The smoke matrix includes a
+`gVisor` simulation (`LD_PRELOAD=tools/mlock_gvisor_sim.so`) proving the
+engine **self-heals to pageable memory** when a runtime reports
+`mlockall()` success but fails locked allocations — the startup-abort class
+of bug can never ship green again.
+
 ### Running
 
 ```bash
-# Custom benchmark (4 separate workloads)
+# Custom benchmark (4 separate workloads).
+# Memory locking is self-diagnosing: HFT_DISABLE_MLOCKALL=1 skips it,
+# HFT_MADVISE_ONLY=1 skips mlockall but keeps MADV_POPULATE_WRITE pre-touch,
+# and a locked-allocation probe self-heals to pageable memory on runtimes
+# where mlockall lies (gVisor/sandboxes) instead of aborting.
 ./build/hft_engine
 
-# Google Test suite (30 test cases)
-./build/hft_tests
+# Full Google Test suite via ctest:
+#   Debug/Audit builds: 111 tests | Release: 87 (debug-only cases compile out)
+ctest --test-dir build --output-on-failure
 
-# Google Benchmark (microbenchmarks)
-./build/hft_bench
+# Real-world simulation (5M events by default; pass a count to smoke-run)
+./build/hft_sim 200000
+
+# Standalone RDTSC latency harness (p50/p90/p99/p99.9/max cycles per op)
+./build/hft_rdtsc_bench
+
+# Google Benchmark suite, Release-like flavors only
+./build/hft_bench --benchmark_min_time=0.1s
 ```
 
 ## Example Output

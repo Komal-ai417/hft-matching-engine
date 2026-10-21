@@ -6,94 +6,317 @@
 #endif
 
 #include <cassert>
+#include <cstdio>
 #include <cstdlib>
 #include <limits>
 #include <stdexcept>
 
 namespace hft {
 
+namespace {
+/// Sanity cap on the price range: ~1 GiB of PriceLevel storage (32 B each).
+/// Beyond that the range is almost certainly a unit mix-up (ticks vs cents).
+constexpr size_t kMaxPriceRangeTicks = size_t{1} << 26;
+constexpr size_t kBytesPerMiB = size_t{1} << 20;
+constexpr size_t kBookSides = 2;  // validate_book walks bids then asks
+}  // namespace
+
 OrderBook::OrderBook(size_t max_order_id, size_t max_active_orders, Price min_price, Price max_price)
-    : min_price_(min_price), max_price_(max_price), max_order_id_(max_order_id),
-      best_bid_(0), best_ask_(max_price), best_bid_idx_(0), best_ask_idx_(0), has_bids_(false), has_asks_(false),
-      order_pool_(max_active_orders)
-{
-    assert(min_price <= max_price && "min_price cannot be greater than max_price");
+    : min_price_(min_price),
+      max_price_(max_price),
+      max_order_id_(max_order_id),
+      best_bid_(0),
+      best_ask_(max_price),
+      best_bid_idx_(0),
+      best_ask_idx_(0),
+      has_bids_(false),
+      has_asks_(false),
+      order_pool_(max_active_orders) {
+    // ── Unified fatal-error policy (audit L-4) ──────────────────────────
+    // Every construction-time validation aborts with a DISTINCT diagnostic
+    // message. Previously: assert+abort / bare abort / catchable bad_alloc
+    // (which became std::terminate under Release's -fno-exceptions) — three
+    // adjacent failure modes with three different observable behaviors.
     if (min_price > max_price) [[unlikely]] {
-        std::abort(); // OrderBook: max_price < min_price
+        std::fprintf(stderr, "OrderBook: fatal - min_price (%u) > max_price (%u)\n", static_cast<unsigned>(min_price),
+                     static_cast<unsigned>(max_price));
+        std::fflush(stderr);
+        std::abort();
     }
     if (max_price == std::numeric_limits<Price>::max()) [[unlikely]] {
-        std::abort(); // OrderBook: max_price saturates Price type (cannot use UINT32_MAX)
+        std::fprintf(stderr,
+                     "OrderBook: fatal - max_price saturates the Price type "
+                     "(UINT32_MAX is reserved for the empty-ask sentinel)\n");
+        std::fflush(stderr);
+        std::abort();
     }
+    const size_t price_range = static_cast<size_t>(max_price) - static_cast<size_t>(min_price) + 1;
+    // Sanity cap: ~1 GiB of PriceLevel storage (32 B each). Beyond that the
+    // range is almost certainly a unit mix-up (e.g. ticks vs. cents).
+    if (price_range > kMaxPriceRangeTicks) [[unlikely]] {
+        std::fprintf(stderr,
+                     "OrderBook: fatal - price range %zu ticks exceeds the "
+                     "sanity cap (2^26); refusing to allocate ~%zu MB of levels\n",
+                     price_range, (price_range * sizeof(PriceLevel)) / kBytesPerMiB);
+        std::fflush(stderr);
+        std::abort();
+    }
+
     best_ask_ = max_price + 1;
-    best_ask_idx_ = max_price + 1 - min_price;
-    
+    best_ask_idx_ = price_range - 1;  // audit M-5: always a VALID index (was price_range = one-past-the-end)
+    best_bid_idx_ = 0;
+
+#if HFT_DEBUG_TOOLS
+    owner_thread_ = std::this_thread::get_id();  // audit M-8: thread-identity latch
+#endif
+
     order_map_.resize(max_order_id + 1, INVALID_INDEX);
-    order_map_.shrink_to_fit();
+    // audit M-8: the six shrink_to_fit() calls were deleted — resize(n)
+    // already yields capacity() == n, so each call was an extra
+    // allocate/copy/free that also reordered page-faulting relative to the
+    // pre-touch pass.
 
-    size_t price_range = static_cast<size_t>(max_price) - static_cast<size_t>(min_price) + 1;
     bids_levels_.resize(price_range);
-    bids_levels_.shrink_to_fit();
     asks_levels_.resize(price_range);
-    asks_levels_.shrink_to_fit();
-    
-    size_t bitset_words = (price_range + 63) / 64;
-    bids_bitset_.resize(bitset_words, 0);
-    bids_bitset_.shrink_to_fit();
-    asks_bitset_.resize(bitset_words, 0);
-    asks_bitset_.shrink_to_fit();
-    
-    size_t summary_words = (bitset_words + 63) / 64;
-    bids_summary_.resize(summary_words, 0);
-    bids_summary_.shrink_to_fit();
-    asks_summary_.resize(summary_words, 0);
-    asks_summary_.shrink_to_fit();
 
-    // Memory Pre-Touching
-    // Prevents page faults upon first access of map and levels during live trading
+    const size_t bitset_words = (price_range + detail::kWordBits - 1) / detail::kWordBits;
+    bids_bitset_.resize(bitset_words, 0);
+    asks_bitset_.resize(bitset_words, 0);
+
+    const size_t summary_words = (bitset_words + detail::kWordBits - 1) / detail::kWordBits;
+    bids_summary_.resize(summary_words, 0);
+    asks_summary_.resize(summary_words, 0);
+
+    // Memory Pre-Touching: prevent page faults upon first access during live
+    // trading. NOTE (audit M-2): vector::resize() value-initializes (WRITES)
+    // every page already, so this block is belt-and-braces for any future
+    // refactor to lazily-allocated structures — but the calls are now
+    // (a) the correct WRITE policy and (b) checked, with a deterministic
+    // per-page touch fallback instead of silent no-ops on old kernels.
     const size_t map_bytes = order_map_.size() * sizeof(uint32_t);
     const size_t levels_bytes = price_range * sizeof(PriceLevel);
     const size_t bitset_bytes = bitset_words * sizeof(uint64_t);
-#if defined(__linux__)
-    madvise(order_map_.data(), map_bytes, MADV_POPULATE_READ);
-    madvise(bids_levels_.data(), levels_bytes, MADV_POPULATE_READ);
-    madvise(asks_levels_.data(), levels_bytes, MADV_POPULATE_READ);
-    madvise(bids_bitset_.data(), bitset_bytes, MADV_POPULATE_READ);
-    madvise(asks_bitset_.data(), bitset_bytes, MADV_POPULATE_READ);
+    const size_t summary_bytes = summary_words * sizeof(uint64_t);
+#if defined(__linux__) && defined(MADV_POPULATE_WRITE)
+    if (madvise(order_map_.data(), map_bytes, MADV_POPULATE_WRITE) != 0 ||
+        madvise(bids_levels_.data(), levels_bytes, MADV_POPULATE_WRITE) != 0 ||
+        madvise(asks_levels_.data(), levels_bytes, MADV_POPULATE_WRITE) != 0 ||
+        madvise(bids_bitset_.data(), bitset_bytes, MADV_POPULATE_WRITE) != 0 ||
+        madvise(asks_bitset_.data(), bitset_bytes, MADV_POPULATE_WRITE) != 0 ||
+        madvise(bids_summary_.data(), summary_bytes, MADV_POPULATE_WRITE) != 0 ||
+        madvise(asks_summary_.data(), summary_bytes, MADV_POPULATE_WRITE) != 0) {
+        // Kernel < 5.14 or cgroup pressure: fault every page deterministically
+        // here, at construction, instead of on the first trade.
+        touch_fallback(order_map_.data(), map_bytes);
+        touch_fallback(bids_levels_.data(), levels_bytes);
+        touch_fallback(asks_levels_.data(), levels_bytes);
+        touch_fallback(bids_bitset_.data(), bitset_bytes);
+        touch_fallback(asks_bitset_.data(), bitset_bytes);
+        touch_fallback(bids_summary_.data(), summary_bytes);
+        touch_fallback(asks_summary_.data(), summary_bytes);
+    }
 #elif defined(_WIN32)
-    // Windows: Lock pages into physical RAM to prevent page faults
-    VirtualLock(order_map_.data(), map_bytes);
-    VirtualLock(bids_levels_.data(), levels_bytes);
-    VirtualLock(asks_levels_.data(), levels_bytes);
-    VirtualLock(bids_bitset_.data(), bitset_bytes);
-    VirtualLock(asks_bitset_.data(), bitset_bytes);
-    // Also pre-touch all pages by reading, not writing!
-    volatile char* p_map = reinterpret_cast<volatile char*>(order_map_.data());
-    char dummy = 0;
-    for (size_t offset = 0; offset < map_bytes; offset += 4096) {
-        dummy ^= p_map[offset];
+    if (!VirtualLock(order_map_.data(), map_bytes)) {
+        touch_fallback(order_map_.data(), map_bytes);
     }
-    volatile char* p_bids = reinterpret_cast<volatile char*>(bids_levels_.data());
-    volatile char* p_asks = reinterpret_cast<volatile char*>(asks_levels_.data());
-    for (size_t offset = 0; offset < levels_bytes; offset += 4096) {
-        dummy ^= p_bids[offset];
-        dummy ^= p_asks[offset];
+    if (!VirtualLock(bids_levels_.data(), levels_bytes)) {
+        touch_fallback(bids_levels_.data(), levels_bytes);
     }
-    (void)dummy;
+    if (!VirtualLock(asks_levels_.data(), levels_bytes)) {
+        touch_fallback(asks_levels_.data(), levels_bytes);
+    }
+    if (!VirtualLock(bids_bitset_.data(), bitset_bytes)) {
+        touch_fallback(bids_bitset_.data(), bitset_bytes);
+    }
+    if (!VirtualLock(asks_bitset_.data(), bitset_bytes)) {
+        touch_fallback(asks_bitset_.data(), bitset_bytes);
+    }
 #else
-    // Generic fallback: manually pre-touch every page by reading
-    volatile char* p_map = reinterpret_cast<volatile char*>(order_map_.data());
-    char dummy = 0;
-    for (size_t offset = 0; offset < map_bytes; offset += 4096) {
-        dummy ^= p_map[offset];
-    }
-    volatile char* p_bids = reinterpret_cast<volatile char*>(bids_levels_.data());
-    volatile char* p_asks = reinterpret_cast<volatile char*>(asks_levels_.data());
-    for (size_t offset = 0; offset < levels_bytes; offset += 4096) {
-        dummy ^= p_bids[offset];
-        dummy ^= p_asks[offset];
-    }
-    (void)dummy;
+    touch_fallback(order_map_.data(), map_bytes);
+    touch_fallback(bids_levels_.data(), levels_bytes);
+    touch_fallback(asks_levels_.data(), levels_bytes);
+    touch_fallback(bids_bitset_.data(), bitset_bytes);
+    touch_fallback(asks_bitset_.data(), bitset_bytes);
 #endif
 }
 
-} // namespace hft
+// static
+void OrderBook::touch_fallback(void* base, size_t bytes) noexcept {
+    // POST-AUDIT REGRESSION FIX: the fallback must be READ-based. A
+    // write-based touch (`p[offset] = 0`) DESTRUCTIVELY zeroes the first byte
+    // of every page-aligned object — corrupting PriceLevel::head and pool
+    // free-list links (reproduced: every 128th level showed head=0xFFFFFF00).
+    // vector::resize() already WROTE every page; the fallback only needs to
+    // guarantee the pages are resident, which a volatile read achieves.
+    const auto* p = static_cast<volatile const unsigned char*>(base);
+    unsigned char sink = 0;
+    for (size_t offset = 0; offset < bytes; offset += detail::kPageSize) {
+        sink ^= p[offset];
+    }
+    (void)sink;
+}
+
+#if HFT_DEBUG_TOOLS
+bool OrderBook::validate_book() const {
+    bool ok = true;
+    const auto fail = [&ok](const char* what, size_t a, size_t b) {
+        std::fprintf(stderr, "[HFT_VALIDATE] invariant violated: %s (%zu vs %zu)\n", what, a, b);
+        ok = false;
+    };
+
+    const Order* const pool_data = order_pool_.data();
+    const uint32_t* const map_ptr = order_map_.data();
+    const size_t price_range = asks_levels_.size();
+
+    size_t resting_count = 0;  // orders found by walking levels
+
+    for (size_t pass = 0; pass < kBookSides; ++pass) {
+        const bool bid_side = (pass == 0);
+        const auto& levels = bid_side ? bids_levels_ : asks_levels_;
+        const auto& bitset = bid_side ? bids_bitset_ : asks_bitset_;
+        const auto& summary = bid_side ? bids_summary_ : asks_summary_;
+
+        for (size_t bit_idx = 0; bit_idx < price_range; ++bit_idx) {
+            const PriceLevel& level = levels[bit_idx];
+
+            // (1) level canary intact
+            if (!level.canary_intact()) {
+                fail("level canary corrupted at price index", bit_idx, 0);
+            }
+
+            // Walk the queue: totals, links, pool liveness, map back-reference.
+            uint64_t walked_qty = 0;
+            uint32_t walked_count = 0;
+            uint32_t cur = level.head;
+            uint32_t prv = INVALID_INDEX;
+            while (cur != INVALID_INDEX) {
+                if (!order_pool_.is_allocated(cur)) {
+                    fail("level references a non-live pool slot", bit_idx, cur);
+                    break;
+                }
+                const Order& o = pool_data[cur];
+                if (o.prev != prv) {
+                    fail("intrusive prev link broken at price index", bit_idx, cur);
+                }
+                const uint32_t nxt = o.next;
+                if (!order_pool_.is_allocated(nxt) && nxt != INVALID_INDEX) {
+                    fail("intrusive next link points to a non-live slot", bit_idx, nxt);
+                }
+                if (map_ptr[o.id] != cur) {
+                    fail("order_map does not back-resolve to the level's slot", o.id, cur);
+                }
+                if (o.price != min_price_ + static_cast<Price>(bit_idx)) {
+                    fail("order price does not match its level index", o.price, bit_idx);
+                }
+                if (o.side != (bid_side ? Side::Buy : Side::Sell)) {
+                    fail("order side does not match its level side", bit_idx, static_cast<size_t>(o.side));
+                }
+                if (nxt == INVALID_INDEX && level.tail != cur) {
+                    fail("walk end does not match level.tail", cur, level.tail);
+                }
+                walked_qty += o.quantity;
+                ++walked_count;
+                prv = cur;
+                cur = nxt;
+            }
+            if (level.head != INVALID_INDEX && level.head < order_pool_.capacity() &&
+                order_pool_.is_allocated(level.head) && pool_data[level.head].prev != INVALID_INDEX) {
+                fail("head->prev is not INVALID_INDEX", level.head, 0);
+            }
+            if (level.total_quantity != walked_qty) {
+                fail("level.total_quantity != walked sum", static_cast<size_t>(level.total_quantity), walked_qty);
+            }
+            if (level.order_count != walked_count) {
+                fail("level.order_count != walked count", level.order_count, walked_count);
+            }
+            resting_count += walked_count;
+
+            // (5) bitset bit iff level non-empty
+            const size_t word = bit_idx / detail::kWordBits, bit = bit_idx % detail::kWordBits;
+            const bool bit_set = (bitset[word] >> bit) & 1ULL;
+            if (bit_set != !level.is_empty()) {
+                fail("bitset bit does not match level emptiness", bit_idx, bit_set);
+            }
+        }
+        // (5b) summary bit iff bitset word non-zero
+        for (size_t w = 0; w < bitset.size(); ++w) {
+            const bool sum_set = (summary[w / detail::kWordBits] >> (w % detail::kWordBits)) & 1ULL;
+            if (sum_set != (bitset[w] != 0)) {
+                fail("summary bit does not match bitset word", w, sum_set);
+            }
+        }
+    }
+
+    // (4) order_map entries resolve into levels (count cross-check; the
+    // per-slot membership was already verified from the level side).
+    size_t map_count = 0;
+    for (size_t id = 1; id <= max_order_id_; ++id) {
+        const uint32_t idx = map_ptr[id];
+        if (idx == INVALID_INDEX) continue;
+        ++map_count;
+        if (!order_pool_.is_allocated(idx)) {
+            fail("order_map entry points to a non-live slot", id, idx);
+        }
+        const Order& o = pool_data[idx];
+        if (o.id != id) {
+            fail("slot id does not match order_map key", o.id, id);
+        }
+    }
+
+    // (6) best price == true extrema when the side is non-empty
+    if (has_bids_) {
+        bool found = false;
+        for (size_t i = asks_levels_.size(); i-- > 0;) {
+            if (!bids_levels_[i].is_empty()) {
+                if (best_bid_ != min_price_ + i || best_bid_idx_ != i) {
+                    fail("best_bid_ is not the true maximum", best_bid_, i);
+                }
+                found = true;
+                break;
+            }
+        }
+        if (!found) {
+            fail("has_bids_ true but no bid level is non-empty", 1, 0);
+        }
+    } else if (best_bid_idx_ >= bids_levels_.size()) {
+        fail("empty-side best_bid_idx_ out of range", best_bid_idx_, bids_levels_.size());
+    }
+    if (has_asks_) {
+        bool found = false;
+        for (size_t i = 0; i < asks_levels_.size(); ++i) {
+            if (!asks_levels_[i].is_empty()) {
+                if (best_ask_ != min_price_ + i || best_ask_idx_ != i) {
+                    fail("best_ask_ is not the true minimum", best_ask_, i);
+                }
+                found = true;
+                break;
+            }
+        }
+        if (!found) {
+            fail("has_asks_ true but no ask level is non-empty", 1, 0);
+        }
+    } else if (best_ask_idx_ >= asks_levels_.size()) {
+        fail("empty-side best_ask_idx_ out of range", best_ask_idx_, asks_levels_.size());
+    }
+
+    // (7) counts: active_count_ == pool live == map entries; free-list depth
+#if HFT_DEBUG_TOOLS
+    const auto st = order_pool_.stats();
+    if (active_count_ != st.live_count) fail("active_count_ != pool live count", active_count_, st.live_count);
+    if (map_count != st.live_count) fail("order_map live entries != pool live count", map_count, st.live_count);
+    if (resting_count != st.live_count)
+        fail("level-walked resting orders != pool live count", resting_count, st.live_count);
+    if (st.free_list_depth != st.capacity - st.live_count) {
+        fail("pool free-list depth != capacity - live (SIZE_MAX = cycle/wild link)", st.free_list_depth,
+             st.capacity - st.live_count);
+    }
+#endif
+
+    if (!ok) {
+        std::fflush(stderr);
+    }
+    return ok;
+}
+#endif  // HFT_DEBUG_TOOLS
+
+}  // namespace hft
