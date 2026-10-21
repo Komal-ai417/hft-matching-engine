@@ -88,7 +88,7 @@ inline constexpr size_t kFaultMessageBytes = 128;            // latch-fault mess
 // site would otherwise trip cppcoreguidelines-avoid-do-while in Release.
 #if HFT_DEBUG_TOOLS
 #define HFT_JOURNAL(EV, ID, PX, QTY, SIDE, ...) \
-    journal_.record(JournalEvent::EV, (ID), (PX), (QTY), static_cast<uint8_t>(SIDE) __VA_OPT__(,) __VA_ARGS__)
+    journal_.record(JournalEvent::EV, (ID), (PX), (QTY), static_cast<uint8_t>(SIDE) __VA_OPT__(, ) __VA_ARGS__)
 #else
 #define HFT_JOURNAL(EV, ID, PX, QTY, SIDE, ...) ((void)0)
 #endif

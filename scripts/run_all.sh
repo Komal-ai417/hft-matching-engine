@@ -28,7 +28,7 @@
 #     clang-tidy, clang++, cc) are skipped with a [skip] note instead of
 #     failing the pipeline.
 # ============================================================================
-set -u
+set -u -o pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 JOBS="${JOBS:-$(nproc 2>/dev/null || echo 4)}"
@@ -81,7 +81,7 @@ else
                 printf '%-12s (not installed)\n' "$t"
             fi
         done
-    } > "$RDIR/env.log" 2>&1
+    } 2>&1 | tee "$RDIR/env.log"
     record env PASS "see env.log"
     mark_done env "see env.log"
 fi
@@ -108,8 +108,8 @@ else
         [ -n "$dep_gtest" ] && extra+=(-DFETCHCONTENT_SOURCE_DIR_GOOGLETEST="$dep_gtest")
         [ -n "$dep_bench" ] && extra+=(-DFETCHCONTENT_SOURCE_DIR_GOOGLEBENCHMARK="$dep_bench")
         note "flavor $f ..."
-        if ! cmake -S "$ROOT" -B "$ROOT/build-$f" "${cfg[@]}" "${extra[@]}" > "$RDIR/build-$f.log" 2>&1 \
-           || ! cmake --build "$ROOT/build-$f" -j"$JOBS" >> "$RDIR/build-$f.log" 2>&1; then
+        if ! ( cmake -S "$ROOT" -B "$ROOT/build-$f" "${cfg[@]}" "${extra[@]}" && \
+               cmake --build "$ROOT/build-$f" -j"$JOBS" ) 2>&1 | tee "$RDIR/build-$f.log"; then
             build_ok=0
             note "[X] flavor $f failed — see build-$f.log"
         fi
@@ -137,7 +137,7 @@ else
     tests_ok=1
     counts=""
     for f in $FLAVORS; do
-        if ! (cd "$ROOT/build-$f" && ctest --output-on-failure -V) > "$RDIR/tests-$f.log" 2>&1; then
+        if ! (cd "$ROOT/build-$f" && ctest --output-on-failure -V) 2>&1 | tee "$RDIR/tests-$f.log"; then
             tests_ok=0
             note "[X] tests failed — see tests-$f.log"
         fi
@@ -164,17 +164,17 @@ else
             echo "[sweep $i] differential suite ($fb build, DifferentialFuzz.* configs)"
             "$ROOT/build-$fb/hft_tests" --gtest_filter='DifferentialFuzz.*' && \
                 echo "[OK] zero divergence (all configs, $fb build)"
-        } > "$RDIR/fuzz-sweep-$i.log" 2>&1 || fuzz_ok=0
+        } 2>&1 | tee "$RDIR/fuzz-sweep-$i.log" || fuzz_ok=0
     done
     fuzz_detail="2 sweeps + libFuzzer"
     if command -v clang++ >/dev/null 2>&1; then
         if clang++ -std=c++20 -g -O1 -fsanitize=fuzzer,address,undefined \
             -I"$ROOT/tests" "$ROOT/tools/fuzz_driver.cpp" "$ROOT/src/OrderBook.cpp" \
-            -o "$RDIR/hft_fuzz" > "$RDIR/fuzz-libfuzzer-build.log" 2>&1; then
+            -o "$RDIR/hft_fuzz" 2>&1 | tee "$RDIR/fuzz-libfuzzer-build.log"; then
             : > "$RDIR/fuzz-libfuzzer.log"
             mkdir -p "$ROOT/fuzz-corpus"   # libFuzzer requires an existing corpus dir
             if ! "$RDIR/hft_fuzz" -max_total_time="$FUZZ_SECS" -rss_limit_mb=2560 \
-                 "$ROOT/fuzz-corpus" >> "$RDIR/fuzz-libfuzzer.log" 2>&1; then
+                 "$ROOT/fuzz-corpus" 2>&1 | tee -a "$RDIR/fuzz-libfuzzer.log"; then
                 fuzz_ok=0
                 note "[X] libFuzzer found something — see fuzz-libfuzzer.log"
             fi
@@ -202,9 +202,9 @@ else
         say "valgrind: suite + engine"
         vg_ok=1
         valgrind --quiet --error-exitcode=9 --leak-check=full \
-            "$ROOT/build-release/hft_tests" > "$RDIR/valgrind-tests.log" 2>&1 || vg_ok=0
+            "$ROOT/build-release/hft_tests" 2>&1 | tee "$RDIR/valgrind-tests.log" || vg_ok=0
         HFT_DISABLE_MLOCKALL=1 valgrind --quiet --error-exitcode=9 --leak-check=full \
-            "$ROOT/build-release/hft_engine" > "$RDIR/valgrind-engine.log" 2>&1 || vg_ok=0
+            "$ROOT/build-release/hft_engine" 2>&1 | tee "$RDIR/valgrind-engine.log" || vg_ok=0
         if [ "$vg_ok" = "1" ]; then
             record valgrind PASS "suite + engine clean"
             mark_done valgrind "suite + engine clean"
@@ -223,7 +223,7 @@ if phase_done static; then
     resume_from static
 else
     say "static analysis (run_static.sh)"
-    if bash "$ROOT/scripts/run_static.sh" > "$RDIR/static.log" 2>&1; then
+    if bash "$ROOT/scripts/run_static.sh" 2>&1 | tee "$RDIR/static.log"; then
         record static PASS "see static.log"
         mark_done static "see static.log"
     else
@@ -238,7 +238,7 @@ else
     say "42-scenario benchmark suite"
     bench_args=()
     [ "$FAST" = "1" ] && bench_args=(--benchmark_min_time=0.1s)
-    if "$ROOT/build-release/hft_bench" ${bench_args[@]+"${bench_args[@]}"} > "$RDIR/bench.log" 2>&1; then
+    if "$ROOT/build-release/hft_bench" ${bench_args[@]+"${bench_args[@]}"} 2>&1 | tee "$RDIR/bench.log"; then
         n_scen=$(grep -cE '^BM_' "$RDIR/bench.log")
         record bench PASS "$n_scen scenarios"
         mark_done bench "$n_scen scenarios"
@@ -252,7 +252,7 @@ if phase_done rdtsc; then
     resume_from rdtsc
 else
     say "RDTSC latency harness"
-    if "$ROOT/build-release/hft_rdtsc_bench" > "$RDIR/rdtsc.log" 2>&1; then
+    if "$ROOT/build-release/hft_rdtsc_bench" 2>&1 | tee "$RDIR/rdtsc.log"; then
         record rdtsc PASS "see rdtsc.log"
         mark_done rdtsc "see rdtsc.log"
     else
@@ -265,7 +265,7 @@ if phase_done sim; then
     resume_from sim
 else
     say "real-world simulation ($SIM_EVENTS events)"
-    if "$ROOT/build-release/hft_sim" "$SIM_EVENTS" > "$RDIR/sim.log" 2>&1; then
+    if "$ROOT/build-release/hft_sim" "$SIM_EVENTS" 2>&1 | tee "$RDIR/sim.log"; then
         d="$(grep -oE 'TIME DIFFERENCE:.*' "$RDIR/sim.log" | head -1)"
         record sim PASS "$d"
         mark_done sim "$d"
@@ -284,7 +284,7 @@ else
     run_smoke() { # name, expected-grep, command...
         local name="$1" expect="$2"; shift 2
         smoke_n=$((smoke_n + 1))
-        if "$@" > "$RDIR/smoke-$name.log" 2>&1 && grep -q "$expect" "$RDIR/smoke-$name.log"; then
+        if "$@" 2>&1 | tee "$RDIR/smoke-$name.log" && grep -q "$expect" "$RDIR/smoke-$name.log"; then
             note "[OK] $name"
         else
             smoke_ok=0
@@ -297,7 +297,7 @@ else
         env HFT_MADVISE_ONLY=1 "$ROOT/build-release/hft_engine"
     if command -v cc >/dev/null 2>&1; then
         if cc -shared -fPIC -O2 -Wall -Wextra -o "$RDIR/mlock_gvisor_sim.so" \
-              "$ROOT/tools/mlock_gvisor_sim.c" -ldl > "$RDIR/smoke-gvisorsim-build.log" 2>&1; then
+              "$ROOT/tools/mlock_gvisor_sim.c" -ldl 2>&1 | tee "$RDIR/smoke-gvisorsim-build.log"; then
             run_smoke engine-gvisorsim "reverting to pageable" \
                 env LD_PRELOAD="$RDIR/mlock_gvisor_sim.so" "$ROOT/build-release/hft_engine"
         else

@@ -457,7 +457,7 @@ static void BM_WorkloadMix(benchmark::State& state) {
         uint32_t next(uint32_t max) { return max ? next() % max : 0; }
     };
     FastRng rng;
-    uint64_t i = 0, ops = 0;
+    uint64_t ops = 0;
     OrderId next_id = 1;
     for (auto _ : state) {
         const uint32_t roll = rng.next(100);
@@ -472,7 +472,6 @@ static void BM_WorkloadMix(benchmark::State& state) {
         } else {
             (void)ob.cancel_order(1 + rng.next(static_cast<uint32_t>(next_id - 1)));
         }
-        ++i;
         ++ops;
     }
     state.counters["ops"] = benchmark::Counter(ops, benchmark::Counter::kIsRate);

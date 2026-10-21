@@ -18,7 +18,6 @@ namespace {
 /// Beyond that the range is almost certainly a unit mix-up (ticks vs cents).
 constexpr size_t kMaxPriceRangeTicks = size_t{1} << 26;
 constexpr size_t kBytesPerMiB = size_t{1} << 20;
-constexpr size_t kBookSides = 2;  // validate_book walks bids then asks
 }  // namespace
 
 OrderBook::OrderBook(size_t max_order_id, size_t max_active_orders, Price min_price, Price max_price)
@@ -170,6 +169,7 @@ bool OrderBook::validate_book() const {
 
     size_t resting_count = 0;  // orders found by walking levels
 
+    constexpr size_t kBookSides = 2;  // validate_book walks bids then asks
     for (size_t pass = 0; pass < kBookSides; ++pass) {
         const bool bid_side = (pass == 0);
         const auto& levels = bid_side ? bids_levels_ : asks_levels_;
