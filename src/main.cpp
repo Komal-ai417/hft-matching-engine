@@ -97,7 +97,7 @@ LockMode prepare_memory_locking() noexcept {
         return LockMode::MadviseOnly;
     }
 
-    struct rlimit rl{};
+    struct rlimit rl {};
     rl.rlim_cur = RLIM_INFINITY;
     rl.rlim_max = RLIM_INFINITY;
     if (setrlimit(RLIMIT_MEMLOCK, &rl) != 0) {

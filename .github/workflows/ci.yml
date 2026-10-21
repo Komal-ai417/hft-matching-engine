@@ -108,7 +108,9 @@ jobs:
         sudo ln -sf /usr/bin/clang-tidy-18 /usr/local/bin/clang-tidy
         sudo ln -sf /usr/bin/clang-format-18 /usr/local/bin/clang-format
     - name: Full verification pipeline (quick mode)
-      run: FAST=1 ./scripts/run_all.sh
+      run: |
+        chmod +x scripts/*.sh
+        FAST=1 ./scripts/run_all.sh
     - name: Upload verify-results bundle
       if: always()
       uses: actions/upload-artifact@v4
