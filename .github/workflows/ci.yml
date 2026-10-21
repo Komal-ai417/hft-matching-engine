@@ -24,10 +24,6 @@ jobs:
         if [ "${{ matrix.compiler }}" = "gcc" ]; then
           sudo apt-get install -y g++-13
         else
-          # Install Clang 18 from official LLVM repo for full C++23 support
-          wget https://apt.llvm.org/llvm.sh
-          chmod +x llvm.sh
-          sudo ./llvm.sh 18
           sudo apt-get install -y clang-18 libc++-18-dev libc++abi-18-dev
         fi
 
