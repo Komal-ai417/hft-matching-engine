@@ -104,6 +104,7 @@ LockMode prepare_memory_locking() noexcept {
         // Unprivileged without CAP_IPC_LOCK: expected on most hosts. Not fatal.
         std::fprintf(stderr, "[hft] setrlimit(RLIMIT_MEMLOCK) failed (%s) — pools will be pageable, not locked\n",
                      std::strerror(errno));
+        return LockMode::Pageable;
     }
 
     if (mlockall(MCL_CURRENT | MCL_FUTURE) != 0) {
