@@ -807,6 +807,12 @@ HFT_ENGINE_INLINE RejectReason OrderBook::cancel_order_impl(OrderId id) {
     Order* const pool_ptr = order_pool_.data();
     Order& order = pool_ptr[order_idx];
     Price price = order.price;
+    // Snapshot the side BEFORE the slot is freed: in Debug/Audit builds
+    // deallocate() poisons the payload (0xDD), so reading order.side after
+    // the free would journal the poison byte instead of the real side.
+    // ([[maybe_unused]]: the snapshot is only consumed by the journal, which
+    // compiles out under pure NDEBUG.)
+    [[maybe_unused]] const Side side = order.side;
     size_t bit_idx = price - min_price_;
 
     if (order.side == Side::Buy) {
@@ -844,7 +850,7 @@ HFT_ENGINE_INLINE RejectReason OrderBook::cancel_order_impl(OrderId id) {
     order_map_ptr[id] = INVALID_INDEX;
     order_pool_.deallocate(order_idx);
     --active_count_;
-    HFT_JOURNAL(OrderCancelled, id, price, 0, static_cast<uint8_t>(order.side));
+    HFT_JOURNAL(OrderCancelled, id, price, 0, static_cast<uint8_t>(side));
 
     return RejectReason::Accepted;
 }

@@ -170,6 +170,30 @@ TEST(DebugAids, JournalRingWrapsWithoutAllocation) {
     EXPECT_TRUE(ob.validate_book());           // book survived the churn
 }
 
+// Regression: the OrderCancelled entry used to read order.side AFTER
+// deallocate() poisoned the slot, journaling the 0xDD poison byte (221)
+// instead of the real side. The entry must record the pre-free side.
+TEST(DebugAids, JournalCancelEntriesRecordTrueSide) {
+    OrderBook ob(100, 100, 0, 1000);
+    (void)ob.add_order(1, OrderType::Limit, 100, 10, Side::Sell, [](const Trade&) noexcept {});
+    (void)ob.add_order(2, OrderType::Limit, 50, 10, Side::Buy, [](const Trade&) noexcept {});  // no cross
+    (void)ob.cancel_order(1);
+    (void)ob.cancel_order(2);
+
+    const Journal& j = ob.journal();
+    int saw_sell = 0, saw_buy = 0, saw_poison = 0;
+    for (size_t i = 0; i < j.size(); ++i) {
+        const JournalEntry& e = j.at(i);
+        if (e.event != static_cast<uint8_t>(JournalEvent::OrderCancelled)) continue;
+        if (e.id == 1 && e.side == static_cast<uint8_t>(Side::Sell)) ++saw_sell;
+        if (e.id == 2 && e.side == static_cast<uint8_t>(Side::Buy)) ++saw_buy;
+        if (e.side == 0xDD) ++saw_poison;
+    }
+    EXPECT_EQ(saw_sell, 1);
+    EXPECT_EQ(saw_buy, 1);
+    EXPECT_EQ(saw_poison, 0) << "journal recorded the 0xDD poison byte as a side (UAF read)";
+}
+
 // ── validate_book() internal-consistency net ─────────────────────
 
 TEST(DebugAids, ValidateBookCleanAcrossScenarioMatrix) {

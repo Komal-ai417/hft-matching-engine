@@ -24,6 +24,11 @@ namespace {
 /// Beyond that the range is almost certainly a unit mix-up (ticks vs cents).
 constexpr size_t kMaxPriceRangeTicks = size_t{1} << 26;
 constexpr size_t kBytesPerMiB = size_t{1} << 20;
+/// Sanity cap on the order-id space: ids are uint32_t and INVALID_INDEX
+/// (0xFFFFFFFF) is reserved, so a larger limit can never be addressable.
+/// This also closes the `max_order_id + 1 == 0` wraparound (SIZE_MAX would
+/// resize the order map to 0 while every id still passes the bounds check).
+constexpr size_t kMaxOrderIds = 0xFFFF'FFFE;
 }  // namespace
 
 OrderBook::OrderBook(size_t max_order_id, size_t max_active_orders, Price min_price, Price max_price)
@@ -51,6 +56,14 @@ OrderBook::OrderBook(size_t max_order_id, size_t max_active_orders, Price min_pr
         std::fprintf(stderr,
                      "OrderBook: fatal - max_price saturates the Price type "
                      "(UINT32_MAX is reserved for the empty-ask sentinel)\n");
+        std::fflush(stderr);
+        std::abort();
+    }
+    if (max_order_id > kMaxOrderIds) [[unlikely]] {
+        std::fprintf(stderr,
+                     "OrderBook: fatal - max_order_id (%zu) exceeds the uint32 id-space cap "
+                     "(0xFFFF'FFFE); order_map would need ~%zu MB\n",
+                     max_order_id, (max_order_id * sizeof(uint32_t)) / kBytesPerMiB);
         std::fflush(stderr);
         std::abort();
     }

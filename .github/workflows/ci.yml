@@ -1,139 +1,301 @@
-name: C++ CI
+# ============================================================================
+# CI — hft-matching-engine
+#
+# Open-source hardening invariants — preserve all of these when editing:
+#
+#   1. SUPPLY CHAIN  Every third-party action is pinned to a full 40-char
+#                    commit SHA, never a mutable tag. Bump by verifying the
+#                    new SHA yourself (e.g. `git ls-remote <url> <tag>`).
+#   2. LEAST PRIVILEGE  The workflow token is read-only by default
+#                    (`permissions: contents: read`). The only escalation is
+#                    CodeQL's `security-events: write`, scoped to that job.
+#   3. NO RUNAWAYS  Every job declares `timeout-minutes`; superseded runs are
+#                    cancelled automatically by the concurrency group.
+#   4. REPRODUCIBLE  Runners are pinned to `ubuntu-24.04` (never -latest) so
+#                    an image rollout cannot change toolchain versions under
+#                    a green build. FetchContent deps are SHA-pinned in
+#                    CMakeLists.txt.
+#   5. DEFENSE IN DEPTH  Lint (format+tidy), the 2x3 compiler/flavor matrix,
+#                    CodeQL scanning, the full run_all.sh verification
+#                    pipeline, and nightly differential fuzzing are separate
+#                    jobs — one broken leg can never hide another.
+#
+# Job graph:
+#   build-and-test         gcc-13/clang-18 x Release/Debug/Audit, -Werror
+#   lint                   clang-format + clang-tidy (warnings-as-errors)
+#   codeql                 GitHub code scanning (C/C++), uploads SARIF
+#   verification-pipeline  scripts/run_all.sh — 11 phases incl. Valgrind,
+#                          cppcheck, sanitizer flavors, gVisor self-heal sim
+#   nightly-fuzz           scheduled libFuzzer differential run w/ corpus cache
+# ============================================================================
+
+name: CI
 
 on:
   push:
     branches: [ "main" ]
   pull_request:
     branches: [ "main" ]
+  workflow_dispatch: {} # allow manual runs from the Actions tab
+  schedule:
+    # Nightly (02:30 UTC) deep-fuzz leg; only fires on the default branch.
+    - cron: "30 2 * * *"
+
+# Least-privilege token: read the repo, nothing else. Jobs that need more
+# re-declare their own scope (see the codeql job).
+permissions:
+  contents: read
+
+# Cancel superseded runs on the same ref — saves runner minutes and prevents
+# two pipelines from racing to upload the same artifact name.
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+defaults:
+  run:
+    shell: bash
 
 jobs:
-  build_and_test:
-    runs-on: ubuntu-latest
+  # ══════════════════════════════════════════════════════════════════════
+  # Build matrix: { gcc, clang } x { Release, Debug, Audit }
+  #   Release = -O3, zero instrumentation (the artifact you ship)
+  #   Debug   = -O0 + ASan + UBSan + full HFT_DEBUG_TOOLS instrumentation
+  #   Audit   = -O2 + instrumentation (memory-safety gear on optimized code)
+  # ══════════════════════════════════════════════════════════════════════
+  build-and-test:
+    name: "build & test: ${{ matrix.compiler }} / ${{ matrix.build_type }}"
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
     strategy:
       fail-fast: false
       matrix:
-        compiler: [gcc, clang]
-        build_type: [Release, Debug, Audit]   # Audit = instrumented -O2 build
+        compiler: [ gcc, clang ]
+        build_type: [ Release, Debug, Audit ]
 
     steps:
-    - uses: actions/checkout@v4
+      - name: Check out sources
+        # actions/checkout v4.2.2
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
 
-    - name: Install Compiler
-      run: |
-        # The runner image ships a Microsoft apt source whose InRelease for
-        # the current Ubuntu release is unsigned; apt-get update then exits
-        # 100 and takes the whole job down. We need nothing from it, so
-        # drop it before updating. See the same note in the lint job.
-        sudo rm -f /etc/apt/sources.list.d/microsoft-*.list \
-                   /etc/apt/sources.list.d/microsoft-*.sources
-        sudo apt-get update
-        if [ "${{ matrix.compiler }}" = "gcc" ]; then
-          sudo apt-get install -y g++-13
-        else
-          sudo apt-get install -y clang-18 libc++-18-dev libc++abi-18-dev libunwind-dev
-          sudo apt-get install -y libunwind-18-dev || true
-        fi
+      - name: Install toolchain
+        run: |
+          # The runner image ships a Microsoft apt source whose InRelease for
+          # the current Ubuntu release can be unsigned; apt-get update then
+          # exits 100 and takes the job down. We install nothing from it, so
+          # drop it before updating. (Same note in lint / pipeline / fuzz.)
+          sudo rm -f /etc/apt/sources.list.d/microsoft-*.list \
+                     /etc/apt/sources.list.d/microsoft-*.sources
+          sudo apt-get update
+          if [ "${{ matrix.compiler }}" = "gcc" ]; then
+            sudo apt-get install -y g++-13
+          else
+            sudo apt-get install -y clang-18 libc++-18-dev libc++abi-18-dev libunwind-dev
+          fi
 
-    - name: Configure CMake
-      run: >
-        cmake -B ${{github.workspace}}/build
-        -DCMAKE_BUILD_TYPE=${{ matrix.build_type }}
-        -DCMAKE_CXX_COMPILER=${{ matrix.compiler == 'gcc' && 'g++-13' || 'clang++-18' }}
-        -DHFT_WERROR=ON
-        ${{ matrix.compiler == 'clang' && '-DCMAKE_CXX_FLAGS=-stdlib=libc++' || '' }}
+      - name: Configure CMake (warnings are errors)
+        run: >
+          cmake -B build
+          -DCMAKE_BUILD_TYPE=${{ matrix.build_type }}
+          -DCMAKE_CXX_COMPILER=${{ matrix.compiler == 'gcc' && 'g++-13' || 'clang++-18' }}
+          -DHFT_WERROR=ON
+          ${{ matrix.compiler == 'clang' && '-DCMAKE_CXX_FLAGS=-stdlib=libc++' || '' }}
 
-    - name: Build
-      run: cmake --build ${{github.workspace}}/build --config ${{ matrix.build_type }} -j$(nproc)
+      - name: Build
+        run: cmake --build build -j"$(nproc)"
 
-    - name: "Test (ctest)"
-      working-directory: ${{github.workspace}}/build
-      run: ctest --output-on-failure
+      - name: Test (ctest)
+        working-directory: build
+        run: ctest --output-on-failure --timeout 300
 
-    # The engine is exception-free (fault handlers, never throw), so the
-    # libc++ exception-string path that originally tripped ASan's
-    # alloc_dealloc_mismatch check is no longer reached. No suppression is
-    # set anywhere in this workflow — the gcc leg below re-runs the binary
-    # with a clean environment to prove none is needed.
-    - name: Test (plain binary, no suppression env)
-      if: matrix.compiler == 'gcc' && matrix.build_type == 'Debug'
-      working-directory: ${{github.workspace}}/build
-      run: ./hft_tests
+      # The engine is exception-free (fault handlers, never throw), so the
+      # libc++ exception-string path that originally tripped ASan's
+      # alloc_dealloc_mismatch check is no longer reached. This leg re-runs
+      # the binary with a clean environment to prove no suppression is set
+      # anywhere in the workflow.
+      - name: Test (plain binary, no suppression env)
+        if: matrix.compiler == 'gcc' && matrix.build_type == 'Debug'
+        working-directory: build
+        run: ./hft_tests
 
-    # Engine smoke — a crash in main.cpp (e.g. an mlockall/bad_alloc
-    # failure) must never ship green.
-    - name: Smoke-run engine (Release/Audit)
-      if: matrix.build_type != 'Debug'
-      working-directory: ${{github.workspace}}/build
-      run: HFT_DISABLE_MLOCKALL=1 timeout 120 ./hft_engine
+      # Engine smoke — a crash in main.cpp (e.g. an mlockall/bad_alloc
+      # failure) must never ship green.
+      - name: Smoke run — hft_engine
+        if: matrix.build_type != 'Debug'
+        working-directory: build
+        run: HFT_DISABLE_MLOCKALL=1 timeout 120 ./hft_engine
 
-    - name: Smoke-run simulation (Release only, 200k events)
-      if: matrix.build_type == 'Release'
-      working-directory: ${{github.workspace}}/build
-      run: timeout 180 ./hft_sim 200000
+      - name: Smoke run — real-world simulation (200k events)
+        if: matrix.build_type == 'Release'
+        working-directory: build
+        run: timeout 180 ./hft_sim 200000
 
-    - name: RDTSC harness smoke (Release only)
-      if: matrix.build_type == 'Release'
-      working-directory: ${{github.workspace}}/build
-      run: timeout 120 ./hft_rdtsc_bench
+      - name: Smoke run — RDTSC latency harness
+        if: matrix.build_type == 'Release'
+        working-directory: build
+        run: timeout 120 ./hft_rdtsc_bench
 
-    - name: Benchmark (Release only)
-      if: matrix.build_type == 'Release'
-      working-directory: ${{github.workspace}}/build
-      run: ./hft_bench --benchmark_min_time=0.1s
+      - name: Benchmarks (quick)
+        if: matrix.build_type == 'Release'
+        working-directory: build
+        run: timeout 600 ./hft_bench --benchmark_min_time=0.1s
 
-  # The repo ships .clang-tidy / .clang-format — run them.
+  # ══════════════════════════════════════════════════════════════════════
+  # Lint: the repo ships .clang-tidy / .clang-format — enforce both.
+  # ══════════════════════════════════════════════════════════════════════
   lint:
-    runs-on: ubuntu-latest
+    name: lint (clang-format + clang-tidy)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
     steps:
-    - uses: actions/checkout@v4
-    - name: Install tooling
-      run: |
-        # The runner image ships a Microsoft apt source whose InRelease for
-        # the current Ubuntu release is unsigned; apt-get update then exits
-        # 100 and takes the whole job down. We need nothing from it, so
-        # drop it before updating. See the same note in the build job.
-        sudo rm -f /etc/apt/sources.list.d/microsoft-*.list \
-                   /etc/apt/sources.list.d/microsoft-*.sources
-        sudo apt-get update
-        sudo apt-get install -y clang-18 clang-tidy-18 clang-format-18
-    - name: clang-format check
-      run: |
-        find src tests tools -name '*.cpp' -o -name '*.h' | xargs clang-format-18 --dry-run --Werror
-    - name: clang-tidy (src/ only; third-party excluded)
-      run: |
-        cmake -B build-tidy -DCMAKE_BUILD_TYPE=Debug -DCMAKE_CXX_COMPILER=clang++-18
-        cmake --build build-tidy --target hft_engine -- -j$(nproc)
-        clang-tidy-18 -p build-tidy src/*.cpp --warnings-as-errors='*'
+      - name: Check out sources
+        # actions/checkout v4.2.2
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
 
-  # Run the same end-to-end pipeline the owner runs locally
-  # (scripts/run_all.sh) — 11 phases: env, build (5 flavors), tests, fuzz,
-  # valgrind, static, bench, rdtsc, sim, smoke (incl. the gVisor self-heal
-  # simulation), summary. The verify-results bundle is uploaded on every run.
-  pipeline:
-    runs-on: ubuntu-latest
+      - name: Install tooling
+        run: |
+          sudo rm -f /etc/apt/sources.list.d/microsoft-*.list \
+                     /etc/apt/sources.list.d/microsoft-*.sources
+          sudo apt-get update
+          sudo apt-get install -y clang-18 clang-tidy-18 clang-format-18
+
+      - name: clang-format check
+        run: |
+          find src tests tools \( -name '*.cpp' -o -name '*.h' \) -print0 \
+            | xargs -0 clang-format-18 --dry-run --Werror
+
+      - name: clang-tidy (src/ only; third-party excluded)
+        run: |
+          cmake -B build-tidy -DCMAKE_BUILD_TYPE=Debug -DCMAKE_CXX_COMPILER=clang++-18
+          cmake --build build-tidy --target hft_engine -- -j"$(nproc)"
+          clang-tidy-18 -p build-tidy src/*.cpp --warnings-as-errors='*'
+
+  # ══════════════════════════════════════════════════════════════════════
+  # CodeQL — free static security scanning for public repos (C/C++).
+  # Uploads SARIF to the repo's Security > Code scanning tab.
+  # ══════════════════════════════════════════════════════════════════════
+  codeql:
+    name: CodeQL security scan
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    permissions:
+      # least privilege + exactly what SARIF upload needs
+      contents: read
+      security-events: write
     steps:
-    - uses: actions/checkout@v4
-    - name: Install pipeline tools
-      run: |
-        # The runner image ships a Microsoft apt source whose InRelease for
-        # the current Ubuntu release is unsigned; apt-get update then exits
-        # 100 and takes the whole job down. We need nothing from it, so
-        # drop it before updating. See the same note in the build job.
-        sudo rm -f /etc/apt/sources.list.d/microsoft-*.list \
-                   /etc/apt/sources.list.d/microsoft-*.sources
-        sudo apt-get update
-        sudo apt-get install -y valgrind cppcheck clang-18 clang-tidy-18 clang-format-18
-        # run_all.sh looks up plain names; Debian suffixes -18
-        sudo ln -sf /usr/bin/clang++-18 /usr/local/bin/clang++
-        sudo ln -sf /usr/bin/clang-tidy-18 /usr/local/bin/clang-tidy
-        sudo ln -sf /usr/bin/clang-format-18 /usr/local/bin/clang-format
-    - name: Full verification pipeline (quick mode)
-      run: |
-        chmod +x scripts/*.sh
-        FAST=1 ./scripts/run_all.sh
-    - name: Upload verify-results bundle
-      if: always()
-      uses: actions/upload-artifact@v4
-      with:
-        name: verify-results
-        path: verify-results/
+      - name: Check out sources
+        # actions/checkout v4.2.2
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+
+      - name: Initialize CodeQL
+        # github/codeql-action v3.28.18
+        uses: github/codeql-action/init@ff0a06e83cb2de871e5a09832bc6a81e7276941f
+        with:
+          languages: cpp
+
+      # Deterministic extraction build (no autobuild guessing): hft_engine
+      # compiles src/main.cpp + src/OrderBook.cpp — full first-party coverage.
+      - name: Build for extraction
+        run: |
+          cmake -B build-codeql -DCMAKE_BUILD_TYPE=Release -DCMAKE_CXX_COMPILER=g++-13
+          cmake --build build-codeql --target hft_engine -j"$(nproc)"
+
+      - name: Analyze
+        # github/codeql-action v3.28.18
+        uses: github/codeql-action/analyze@ff0a06e83cb2de871e5a09832bc6a81e7276941f
+        with:
+          category: "/language:cpp"
+
+  # ══════════════════════════════════════════════════════════════════════
+  # Full verification pipeline — the same end-to-end script the owner runs
+  # locally (scripts/run_all.sh): 11 phases — env, 5-flavor build, tests,
+  # fuzz, Valgrind, static analysis, benchmarks, RDTSC, simulation, smoke
+  # matrix (incl. the gVisor self-heal simulation), summary. The bundle is
+  # uploaded on every run, success or failure.
+  # ══════════════════════════════════════════════════════════════════════
+  verification-pipeline:
+    name: full verification pipeline (run_all.sh)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    steps:
+      - name: Check out sources
+        # actions/checkout v4.2.2
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+
+      - name: Install pipeline tools
+        run: |
+          sudo rm -f /etc/apt/sources.list.d/microsoft-*.list \
+                     /etc/apt/sources.list.d/microsoft-*.sources
+          sudo apt-get update
+          sudo apt-get install -y valgrind cppcheck clang-18 clang-tidy-18 clang-format-18
+          # run_all.sh looks up plain names; Debian suffixes -18
+          sudo ln -sf /usr/bin/clang++-18 /usr/local/bin/clang++
+          sudo ln -sf /usr/bin/clang-tidy-18 /usr/local/bin/clang-tidy
+          sudo ln -sf /usr/bin/clang-format-18 /usr/local/bin/clang-format
+
+      - name: Run pipeline (quick mode)
+        run: |
+          chmod +x scripts/*.sh
+          FAST=1 ./scripts/run_all.sh
+
+      - name: Upload verify-results bundle
+        if: always()
+        # actions/upload-artifact v4.6.2
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: verify-results
+          path: verify-results/
+          retention-days: 14
+          if-no-files-found: warn
+
+  # ══════════════════════════════════════════════════════════════════════
+  # Nightly differential fuzzing — libFuzzer drives the engine against the
+  # StdOrderBook oracle (tools/fuzz_driver.cpp); any divergence between
+  # result code, filled quantity, trade stream or resting count is a crash.
+  # Runs on schedule and on demand; the corpus is cached between runs so
+  # coverage compounds.
+  # ══════════════════════════════════════════════════════════════════════
+  nightly-fuzz:
+    name: differential fuzz (libFuzzer, 20 min)
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 40
+    steps:
+      - name: Check out sources
+        # actions/checkout v4.2.2
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+
+      - name: Install toolchain
+        run: |
+          sudo rm -f /etc/apt/sources.list.d/microsoft-*.list \
+                     /etc/apt/sources.list.d/microsoft-*.sources
+          sudo apt-get update
+          sudo apt-get install -y clang-18
+          # fuzz.sh invokes the unversioned name
+          sudo ln -sf /usr/bin/clang++-18 /usr/local/bin/clang++
+
+      - name: Restore fuzz corpus
+        # actions/cache v4.2.3 — carry libFuzzer coverage between nightly runs
+        uses: actions/cache@5a3ec84eff668545956fd18022155c47e93e2684
+        with:
+          path: fuzz-corpus
+          key: fuzz-corpus-${{ github.run_id }}
+          restore-keys: |
+            fuzz-corpus-
+
+      - name: Run differential fuzzer (20 minutes)
+        run: scripts/fuzz.sh libfuzzer 1200
+
+      - name: Upload crash artifacts
+        if: failure()
+        # actions/upload-artifact v4.6.2
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: fuzz-crash-artifacts
+          path: |
+            crash-*
+            oom-*
+            timeout-*
+            leak-*
+          if-no-files-found: ignore
+          retention-days: 30
