@@ -66,26 +66,38 @@ The `MemoryPool` pre-allocates an array of `N` `Order` structs inside a single c
 ```mermaid
 graph TD
     subgraph Initialization ["Boot Up"]
-        A["1. vector allocates N Order structs"] --> B["2. next_free_ = 0"]
-        B --> C["3. pool 0 next = 1"]
-        C --> D["4. pool 1 next = 2"]
-        D --> E["5. ... until pool N-1 next = INVALID_INDEX"]
+        A["1. vector allocates N Order structs"] --> B["2. free_head_ = 0"]
+        B --> C["3. slot 0 next = 1"]
+        C --> D["4. slot 1 next = 2"]
+        D --> E["5. ... until slot N-1 next = INVALID_INDEX"]
     end
 ```
 
+The free-list link is overlaid on the **first 4 bytes** of each slot
+(`Order::next`), accessed through `std::memcpy` so there is no
+strict-aliasing violation.
+
 ### Allocation Flow ($O(1)$)
 When an order arrives, `engine` calls `pool.allocate()`:
-1. `idx = next_free_`
-2. `next_free_ = pool_data_[idx].next` (Advances stack)
-3. Allocation byte flips `allocated_[idx] = 1`
+1. `idx = free_head_`
+2. `free_head_ = overlay_link(pool[idx])` (Advances stack)
+3. In Debug/Audit: the allocation stamp flips `allocated_[idx] = 1`
 4. Returns `idx`.
 
 ### Deallocation Flow & Double-Free Protection
 When an order executes or cancels:
 1. Engine calls `pool.deallocate(idx)`
-2. Checks bounds `idx < pool_data_.size()`.
-3. Checks `allocated_[idx]`. If `0`, it throws `std::logic_error("Double free detected")`. This is vital because double-frees corrupt the LIFO structure, causing two clients to own the same memory address.
-4. Flips `allocated_[idx] = 0`.
-5. Pushes back to stack: `pool_data_[idx].next = next_free_; next_free_ = idx;`
+2. **Debug/Audit:** checks bounds `idx < capacity()` and the slot's state
+   stamp. A double free, a wild free or an out-of-range index invokes the
+   installed fault handler; with no handler installed, the pool prints a
+   diagnostic and aborts deterministically. This is vital because
+   double-frees corrupt the LIFO structure, causing two clients to own
+   the same memory address.
+3. **Debug/Audit:** flips `allocated_[idx] = 0`.
+4. Pushes back to stack: `overlay_link(pool[idx]) = free_head_; free_head_ = idx;`
 
-This technique completely bypasses the OS `malloc`/`free` global locks, resolving all memory operations within CPU registers.
+**Release** compiles the guards out entirely: the index must come from
+book state. The Audit flavor exists to verify that invariant, and CI
+runs it before any Release artifact ships.
+
+This technique completely bypasses the OS `malloc`/`free` global locks: the free-list head and the slot index stay in registers, and the links themselves live in the pool's own memory.

@@ -1,7 +1,9 @@
+// SPDX-License-Identifier: MIT
+// Copyright (c) 2026 Karyampudi Komal
+//
 // ============================================================================
-// Real-world simulation harness: the engine and the std::map reference
-// replay the same synthetic event stream (market-maker quotes, retail
-// limit orders, institutional sweeps) and are compared on time and memory.
+// real_world_sim.cpp — market-maker/retail/institutional event stream replayed
+// against both books, compared on wall time and peak memory.
 //
 // The event count is overridable via argv[1] so CI can smoke-run it fast.
 // ============================================================================

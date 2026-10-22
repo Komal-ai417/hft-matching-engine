@@ -1,3 +1,11 @@
+// SPDX-License-Identifier: MIT
+// Copyright (c) 2026 Karyampudi Komal
+//
+// ============================================================================
+// benchmark_ob.cpp — the Google Benchmark suite. Every scenario runs against
+// both the engine and the std::map reference so the speedup is measured
+// rather than asserted.
+// ============================================================================
 #include <benchmark/benchmark.h>
 
 #include <memory>

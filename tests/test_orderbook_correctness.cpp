@@ -1,6 +1,9 @@
+// SPDX-License-Identifier: MIT
+// Copyright (c) 2026 Karyampudi Komal
+//
 // ============================================================================
-// OrderBook correctness gap tests. Every family here was ZERO-coverage in
-// the original suite:
+// test_orderbook_correctness.cpp — OrderBook correctness gap tests. Every
+// family here was ZERO-coverage in the original suite:
 //   * nonzero min_price books (all 30 original tests used min_price = 0)
 //   * cancel-the-best-level -> next-best becomes matchable (both sides, gaps)
 //   * queue-position cancels (head/middle/tail of multi-order levels)

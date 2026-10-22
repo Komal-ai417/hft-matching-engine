@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: MIT
+// Copyright (c) 2026 Karyampudi Komal
+//
 // ============================================================================
 // fuzz_driver.cpp — libFuzzer entry point around the differential core
 // (a libFuzzer build of the differential core for continuous deep fuzzing).

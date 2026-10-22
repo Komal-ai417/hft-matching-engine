@@ -1,5 +1,9 @@
 #pragma once
 
+// SPDX-License-Identifier: MIT
+// Copyright (c) 2026 Karyampudi Komal
+//
+// ============================================================================
 // Journal.h — order lifecycle tracking for Debug/Audit builds.
 //
 // A fixed-capacity append-only ring of compact event records written at every
@@ -73,6 +77,15 @@ struct JournalEntry {
     uint8_t pad_;
 };
 
+/**
+ * @class Journal
+ * @brief Fixed-capacity ring buffer of order lifecycle events, used as the
+ * postmortem primitive after a canary fault or a validate_book() failure.
+ *
+ * Nothing dumps the journal automatically — a caller (or a debugger
+ * breakpoint) invokes `journal().dump(stderr)` to render the retained
+ * window.
+ */
 class Journal {
    public:
     /// Default ring capacity (power of two, as required by the index mask).

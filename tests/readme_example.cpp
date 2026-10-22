@@ -1,8 +1,15 @@
+// SPDX-License-Identifier: MIT
+// Copyright (c) 2026 Karyampudi Komal
+//
 // ============================================================================
-// README example — compiled verbatim as a regression test. The README "API"
-// example must compile against the engine's enforced noexcept-callback
-// contract, so documentation cannot drift from the API. If the README
-// example is updated, update this file in the same commit.
+// readme_example.cpp — a compile-guard for the README "API" example.
+//
+// The README example must compile against the engine's enforced
+// noexcept-callback contract, so documentation cannot drift from the API.
+// It mirrors the README's calls (limit order, crossing order, cancel) but
+// not its literal text — the prices and order types differ so the guard
+// exercises the API rather than mirroring a transcript. If the README
+// example is updated, mirror the edit here in the same commit.
 // ============================================================================
 
 #include <gtest/gtest.h>
@@ -12,7 +19,7 @@
 using namespace hft;
 
 namespace {
-// Mirrors the README "Quick Start" API section. The callback is noexcept.
+// Mirrors the README "API" section. The callback is noexcept.
 // (If you edit the README example, mirror the edit here.)
 void readme_example() {
     OrderBook ob(1'000'000, 1'000'000, 0, 200'000);  // max ids, pool size, price range

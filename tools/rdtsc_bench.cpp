@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: MIT
+// Copyright (c) 2026 Karyampudi Komal
+//
 // ============================================================================
 // rdtsc_bench.cpp — standalone cycle-accurate latency harness (no deps).
 //

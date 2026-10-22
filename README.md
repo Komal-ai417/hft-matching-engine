@@ -58,7 +58,10 @@ graph TD
 
 ## Performance Metrics
 
-**Google Benchmark** (MSVC, `-O2`, Windows, 12 × 2611 MHz CPU):
+**Google Benchmark** (MSVC, `-O2`, Windows, 12 × 2611 MHz CPU) — the nine
+original scenarios; the six newer families (Churn, AllocationPath,
+BranchPredictability, CacheLocality, BookDepthScaling, WorkloadMix) are
+listed in [docs/5_Test_Infrastructure.md](docs/5_Test_Infrastructure.md):
 
 | Benchmark | OrderBook CPU (ns) | StdOrderBook CPU (ns) | Speedup Ratio |
 | :--- | ---: | ---: | ---: |
@@ -72,7 +75,7 @@ graph TD
 | `BM_WideSpreadMatching` | **43.2** | 572 | **13.24×** |
 | `BM_MixedWorkload` | **16.8** | 307 | **18.27×** |
 
-- **Zero-Allocation Stack Matching:** Taker orders match using stack-allocated variables, bypassing pool overhead for immediate matches to achieve **15× to 25× speedups** in deep matching scenarios.
+- **Zero-Allocation Taker Matching:** an incoming taker's quantity is a stack local, so a taker that crosses fully never occupies a pool slot — a slot is taken only if the remainder has to rest. This avoids pool overhead on the immediate-match path to achieve **15× to 25× speedups** in deep matching scenarios.
 - **Bulk Maker Deallocation:** Exited price levels are unlinked instantly, pushing batch matches to a **20× speedup**.
 - **Bound Caching & L1 Density:** By shrinking `Order` to 24 bytes and utilizing 32-bit indices, passive insertion hits true hardware latency at **12.7 ns/op**.
 
@@ -83,7 +86,7 @@ To achieve sub-microsecond latency, this engine adheres to the following strict 
 ### 1. Zero Dynamic Allocation on the Critical Path
 In C++, `new` and `malloc` require expensive context switches to the Operating System. During active trading hours, we cannot afford this unpredictability. 
 - **Solution:** A custom `MemoryPool<Order>` pre-allocates a massive contiguous block of memory on startup `(e.g., 1,000,000 orders)`. The matching engine simply hands out 32-bit indices (`uint32_t`) to pre-allocated memory using an intrusive stack-based LIFO free-list embedded directly within unused Orders. Allocation and deallocation are strictly $O(1)$ and never hit the OS.
-- **Safety:** An allocation bitmap detects double-free bugs at runtime, preventing the same memory address from being returned to two callers.
+- **Safety:** A per-slot allocation stamp plus a state magic byte detect double-free and wild-free bugs at runtime, preventing the same memory address from being returned to two callers. In Release those guards are compiled out — the Audit flavor keeps them on at `-O2` and is what CI runs before a Release artifact ships.
 
 ### 2. Cache Locality & Intrusive Data Structures
 Standard library containers (like `std::list`) allocate individual nodes across the heap, causing severe memory fragmentation and destroying CPU L1/L2 cache coherence via cache misses.
@@ -146,9 +149,10 @@ ob.cancel_order(1);
 
 The full contract — including the single-thread and no-re-entrancy rules,
 both enforced by Debug/Audit latches — is in
-[docs/4_API_Reference.md](docs/4_API_Reference.md). This example is compiled
-verbatim as a regression test (`tests/readme_example.cpp`), so documentation
-can no longer drift from the enforced API.
+[docs/4_API_Reference.md](docs/4_API_Reference.md). A compile-guard in
+`tests/readme_example.cpp` exercises the same calls against the engine's
+enforced noexcept-callback contract, so the documented API cannot drift
+from the API that actually compiles.
 
 ## Build Instructions
 

@@ -1,9 +1,12 @@
+// SPDX-License-Identifier: MIT
+// Copyright (c) 2026 Karyampudi Komal
+//
 // ============================================================================
-// MemoryPool unit tests. Covers: allocation order, exhaustion, LIFO
-// recycling, double-free / out-of-range / chain faults (exception-free, via
-// the fault handler), poison canaries, generation stamps, allocation
-// statistics, free-list depth reconciliation, template genericity and a
-// 10k-op shadow-model property test.
+// test_memory_pool.cpp — MemoryPool unit tests. Covers: allocation order,
+// exhaustion, LIFO recycling, double-free / out-of-range / chain faults
+// (exception-free, via the fault handler), poison canaries, generation
+// stamps, allocation statistics, free-list depth reconciliation, template
+// genericity and a 10k-op shadow-model property test.
 // ============================================================================
 
 #include <gtest/gtest.h>

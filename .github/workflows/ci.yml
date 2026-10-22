@@ -43,10 +43,12 @@ jobs:
       working-directory: ${{github.workspace}}/build
       run: ctest --output-on-failure
 
-    # The ASan alloc_dealloc_mismatch suppression is scoped to the
-    # clang/libc++ legs where the documented false positive occurs — not a
-    # process-global suppression on every job.
-    - name: Test (rerun without suppression on gcc)
+    # The engine is exception-free (fault handlers, never throw), so the
+    # libc++ exception-string path that originally tripped ASan's
+    # alloc_dealloc_mismatch check is no longer reached. No suppression is
+    # set anywhere in this workflow — the gcc leg below re-runs the binary
+    # with a clean environment to prove none is needed.
+    - name: Test (plain binary, no suppression env)
       if: matrix.compiler == 'gcc' && matrix.build_type == 'Debug'
       working-directory: ${{github.workspace}}/build
       run: ./hft_tests

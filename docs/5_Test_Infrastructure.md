@@ -54,14 +54,14 @@ which is why CI runs the Audit flavor before any Release artifact ships.
 
 | File | Suites | What it covers |
 | :--- | :--- | :--- |
-| `tests/test_ob.cpp` | 28 | Matching, markets, cancels, validation, pool boundaries — assertions restored, 1M-cycle stress, repeated ID reuse |
-| `tests/test_memory_pool.cpp` | 18+ | Allocation order, exhaustion, LIFO, double-free/out-of-range/chain faults (incl. the out-of-range-tail reproducer), canaries, generations, stats, 10k-op shadow-model property test |
-| `tests/test_price_level.cpp` | 13 | Direct coverage: append/remove semantics, links both directions, canary, 2k-op shadow-model property test |
-| `tests/test_orderbook_correctness.cpp` | 30 | Nonzero `min_price`, cancel-best across gaps (both sides), queue-position cancels, multi-maker partial fills, wide-range summary scans (>4096 ticks), word-boundary straddles, pool-exhaustion invariants, market `filled_out` semantics, 5k-op reconciliation |
+| `tests/test_ob.cpp` | 33 | Matching, markets, cancels, validation, pool boundaries — assertions restored, 1M-cycle stress, repeated ID reuse |
+| `tests/test_memory_pool.cpp` | 22 | Allocation order, exhaustion, LIFO, double-free/out-of-range/chain faults (incl. the out-of-range-tail reproducer), canaries, generations, stats, 10k-op shadow-model property test |
+| `tests/test_price_level.cpp` | 11 | Direct coverage: append/remove semantics, links both directions, canary, 2k-op shadow-model property test |
+| `tests/test_orderbook_correctness.cpp` | 24 | Nonzero `min_price`, cancel-best across gaps (both sides), queue-position cancels, multi-maker partial fills, wide-range summary scans (>4096 ticks), word-boundary straddles, pool-exhaustion invariants, market `filled_out` semantics, 5k-op reconciliation |
 | `tests/test_differential_fuzz.cpp` | 7 configs | Engine vs `StdOrderBook` parity: reject codes, filled qty, full trade streams, resting counts, final-liquidity drains — with `validate_book()` every 128 ops |
-| `tests/test_debug_aids.cpp` | 10 | Journal sequence fidelity, both latches, fault-handler plumbing, validate_book across a 2k-op scenario matrix |
+| `tests/test_debug_aids.cpp` | 8 | Journal sequence fidelity, both latches, fault-handler plumbing, validate_book across a 2k-op scenario matrix |
 | `tests/test_std_reference.cpp` | 5 | The reference oracle itself: the `side_map_` leak sentinel, validation parity, market remainder, exhaustion |
-| `tests/readme_example.cpp` | 1 | The README API example, compiled verbatim (compile guard) |
+| `tests/readme_example.cpp` | 1 | A compile-guard for the README API example: the same calls against the enforced noexcept-callback contract |
 
 Counts: **111 tests in Debug/Audit**, **87 in Release** (debug-only cases
 compile out via `#if HFT_DEBUG_TOOLS`).
@@ -131,8 +131,10 @@ plain-looking headers and dies on `namespace hft`.
 * Engine + simulation + RDTSC smoke runs (a startup crash can never ship
   green — that is how the mlockall `std::bad_alloc` bug survived).
 * Separate `lint` job: clang-format check + clang-tidy on `src/`.
-* The ASan `alloc_dealloc_mismatch` suppression is scoped to the
-  clang/libc++ legs only.
+* No ASan suppression is set anywhere: the engine is exception-free, so
+  the libc++ exception-string path that originally tripped the
+  `alloc_dealloc_mismatch` check is never reached. The gcc/Debug leg
+  re-runs the test binary with a clean environment to prove it.
 
 ## 6. Fuzzing
 

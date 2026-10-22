@@ -1,6 +1,6 @@
 # Edge Case & Correctness Matrix
 
-Financial matching engines are zero-tolerance systems regarding mathematical correctness and memory safety. The engine is safeguarded by 30 formalized Google Test cases split into the following domains.
+Financial matching engines are zero-tolerance systems regarding mathematical correctness and memory safety. The engine is safeguarded by **111 Google Test cases** (87 in Release, where the debug-only cases compile out) split into the following domains.
 
 ## 1. Priority & Market Integrity Logic
 
@@ -32,12 +32,24 @@ Because the engine manages custom memory layouts, the CI pipeline integrates LLV
 ### Stress Testing
 
 - **`AllocDeallocCycleStress`**: Exercises `MemoryPool` integrity with 1,000,000 insert+cancel cycles against a 10-slot pool, then asserts `active_order_count() == 0`, `price_level_count() == 0`, ID non-existence and that the book still accepts new orders (see `tests/test_ob.cpp`).
-- **`ExhaustPoolSilentDrop`**: Evaluates exhaustion handling. Upon reaching maximum active orders, asserts that new orders are safely and silently dropped without exceptions (`-fno-exceptions` safe), catching runaway Gateway feeds.
+- **`ExhaustPoolSilentDrop`**: Evaluates exhaustion handling. When the pool is full, the order is rejected with `RejectReason::PoolExhausted` — no exception, no allocation, and no residue left in the book.
 
 ### The `libc++` Mismatch Resolution
 
-During rigorous Clang 18 testing, the AddressSanitizer emitted an `alloc-dealloc-mismatch` false positive relating to standard library exception generation (`std::logic_error` string allocations inside the LLVM libc++ layer). 
-- **The Engine side:** the memory stress test uses a controlled try-catch validation block, avoiding GTest macro exception-capturing anomalies.
-- **The CI side:** `ASAN_OPTIONS=alloc_dealloc_mismatch=0` is set for the test suites to suppress this known LLVM/Linux exception-string false-positive, maintaining absolute integrity of our core algorithmic heap checks.
+During rigorous Clang 18 testing, the AddressSanitizer emitted an
+`alloc-dealloc-mismatch` false positive originating in the standard
+library's exception machinery (`std::logic_error` string allocations
+inside the LLVM libc++ layer), not in the engine.
+- **The Engine side:** the engine and its pool are exception-free by
+  design — no `throw`, no `try`/`catch`, no `std::logic_error` anywhere
+  in `src/` or `tests/`. Faults are reported through a settable fault
+  handler that prints a diagnostic and aborts deterministically, so the
+  same code path behaves identically under Release's `-fno-exceptions`
+  and does not trip the GTest exception-capturing macros. The libc++
+  exception-string path that triggered the false positive is therefore
+  never reached.
+- **The CI side:** no `ASAN_OPTIONS` suppression is set anywhere in the
+  workflow. The gcc/Debug leg re-runs the test binary with a clean
+  environment to prove none is needed.
 
-**Conclusion (scoped per build flavor):** Debug and Audit builds guarantee double-free and wild-free detection via slot state stamps (`MemoryPool` faults), bounds-check all physical inputs, and verify internal consistency via `validate_book()`. Pure Release builds trust caller invariants by design (zero-overhead contract) — run the Audit flavor in CI before shipping a Release binary. AddressSanitizer/LeakSanitizer runs over the full 111-test suite report zero leaks and zero memory errors (see `verification/ALL_TEST_RESULTS.txt`).
+**Conclusion (scoped per build flavor):** Debug and Audit builds guarantee double-free and wild-free detection via slot state stamps (`MemoryPool` faults), bounds-check all physical inputs, and verify internal consistency via `validate_book()`. Pure Release builds trust caller invariants by design (zero-overhead contract) — run the Audit flavor in CI before shipping a Release binary. AddressSanitizer/LeakSanitizer runs over the full 111-test suite report zero leaks and zero memory errors; `scripts/run_all.sh` writes the per-phase evidence (including the sanitizer legs) to `verify-results/<UTC-timestamp>/`, with a `summary.txt` roll-up.

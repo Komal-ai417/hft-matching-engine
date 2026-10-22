@@ -1,3 +1,11 @@
+// SPDX-License-Identifier: MIT
+// Copyright (c) 2026 Karyampudi Komal
+//
+// ============================================================================
+// test_ob.cpp — core OrderBook behaviour: matching, market orders, cancels,
+// duplicate ids, input validation, pool boundaries, and the pool's
+// double-free detection exercised directly through MemoryPool.
+// ============================================================================
 #include <gtest/gtest.h>
 
 #include <vector>

@@ -1,6 +1,9 @@
+// SPDX-License-Identifier: MIT
+// Copyright (c) 2026 Karyampudi Komal
+//
 // ============================================================================
-// StdOrderBook reference tests: the benchmark baseline AND the
-// differential-testing oracle.
+// test_std_reference.cpp — StdOrderBook reference tests: the benchmark
+// baseline AND the differential-testing oracle.
 // ============================================================================
 
 #include <gtest/gtest.h>

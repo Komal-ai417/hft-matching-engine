@@ -1,3 +1,10 @@
+// SPDX-License-Identifier: MIT
+// Copyright (c) 2026 Karyampudi Komal
+//
+// ============================================================================
+// Order.h — core value types (OrderId, Price, Quantity) and the Order record
+// shared by the order book, the price levels and the memory pool.
+// ============================================================================
 #pragma once
 
 #include <cstddef>
@@ -7,14 +14,20 @@
 
 namespace hft {
 
+/// Unique order identifier. Zero and ids above the book's limit are rejected.
 using OrderId = uint32_t;
-using Price = uint32_t;  // Fixed-point representation for speed (e.g., $1.50 = 15000)
+/// Fixed-point price in venue ticks (e.g. $1.50 = 15000). Integer arithmetic
+/// keeps matching free of floating-point indeterminism.
+using Price = uint32_t;
+/// Order size in venue lots. Must be > 0 for Limit and Market orders.
 using Quantity = uint32_t;
 
 /// Named constants for market order pricing — avoids fragile unsigned underflow hacks.
 constexpr Price MARKET_BUY_PRICE = std::numeric_limits<Price>::max();
 constexpr Price MARKET_SELL_PRICE = 0;
 
+/// Sentinel for "no such index" in the order map, the price levels and the
+/// pool's free list. UINT32_MAX is reserved, hence the pool's capacity clamp.
 constexpr uint32_t INVALID_INDEX = UINT32_MAX;
 
 /// The exact size Order must occupy: 24 B packs 2.67 orders per 64-byte cache
@@ -27,6 +40,10 @@ inline constexpr size_t ORDER_BYTES = 24;
  */
 enum class Side : uint8_t { Buy, Sell };
 
+/**
+ * @enum OrderType
+ * @brief The three order behaviours the book understands.
+ */
 enum class OrderType : uint8_t {
     Limit,   // Matches at or better than a specified price
     Market,  // Matches immediately at the best available price

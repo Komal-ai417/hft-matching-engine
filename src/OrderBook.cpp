@@ -1,3 +1,11 @@
+// SPDX-License-Identifier: MIT
+// Copyright (c) 2026 Karyampudi Komal
+//
+// ============================================================================
+// OrderBook.cpp — construction, validation and the cross-structural
+// invariant checker (validate_book). The matching hot path itself lives in
+// the header so it can be inlined into the caller's translation unit.
+// ============================================================================
 #include "OrderBook.h"
 #if defined(__linux__)
 #include <sys/mman.h>

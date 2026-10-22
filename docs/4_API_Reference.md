@@ -127,12 +127,15 @@ Defined in `PriceLevel.h`. An aggregate of all resting orders at a specific pric
 
 | Field | Type | Description |
 | :--- | :--- | :--- |
-| `total_quantity` | `uint64_t` | Sum of all resting order quantities at this level. |
-| `order_count` | `uint32_t` | Number of orders currently queued. |
 | `head` | `uint32_t` | Index of the oldest (first-in) order. |
 | `tail` | `uint32_t` | Index of the newest (last-in) order. |
+| `total_quantity` | `uint64_t` | Sum of all resting order quantities at this level. |
+| `order_count` | `uint32_t` | Number of orders currently queued. |
+| `debug_canary` | `uint32_t` | Magic value in the last named member (offset 0x14); verified by `validate_book()` in Debug/Audit. Catches whole-array memset-style corruption that would zero it. |
 
 **Note:** The `price` is implicit from the level's index in the `bids_levels_` or `asks_levels_` vector.
+
+**Layout:** exactly 32 bytes (`alignas(32)`), so two levels fit in one 64-byte cache line without straddling.
 
 #### Methods
 
@@ -141,6 +144,7 @@ Defined in `PriceLevel.h`. An aggregate of all resting orders at a specific pric
 | `void append_order(uint32_t order_idx, Order* pool_data)` | $O(1)$ | Appends an order to the tail of the intrusive linked list. |
 | `void remove_order(uint32_t order_idx, Order* pool_data)` | $O(1)$ | Detaches an order from the linked list by re-wiring `prev`/`next` indices. |
 | `bool is_empty() const noexcept` | $O(1)$ | Returns `true` if `head == INVALID_INDEX`. |
+| `bool canary_intact() const noexcept` | $O(1)$ | Returns `true` if the debug canary is undamaged. |
 
 ---
 
@@ -163,19 +167,20 @@ explicit OrderBook(size_t max_order_id, size_t max_active_orders, Price min_pric
 | `min_price` | `Price` | Minimum valid tick price (inclusive). |
 | `max_price` | `Price` | Maximum valid tick price (inclusive). |
 
-**Side Effects:** Allocates `(max_price - min_price + 1)` `PriceLevel` structs for both bids and asks. Initializes bitset arrays for hardware-accelerated price discovery. Validates `min_price <= max_price` (aborts/asserts if invalid).
+**Side Effects:** Allocates `(max_price - min_price + 1)` `PriceLevel` structs for both bids and asks. Initializes bitset arrays for hardware-accelerated price discovery. Invalid arguments (an inverted price range, a `max_price` that saturates the `Price` type, or a price range beyond the `2^26`-tick sanity cap) abort with a diagnostic on stderr — in every build flavor, never an exception.
 
 #### `add_order`
 
 ```cpp
 template <typename TradeCallback>
-[[nodiscard]] HFT_FORCEINLINE RejectReason add_order(
+[[nodiscard]] HFT_ENGINE_INLINE RejectReason add_order(
     OrderId id,
     OrderType type,
     Price price,
     Quantity quantity,
     Side side,
-    TradeCallback&& on_trade
+    TradeCallback&& on_trade,
+    Quantity* filled_out = nullptr
 );
 ```
 
@@ -189,6 +194,7 @@ template <typename TradeCallback>
 | `quantity` | `Quantity` | Order size. Must be `> 0`. Ignored for `Cancel`. |
 | `side` | `Side` | `Buy` or `Sell`. For `Cancel`, this parameter is ignored. |
 | `on_trade` | `TradeCallback&&` | A callable with signature `void(const Trade&) noexcept`. Invoked synchronously for each fill. **WARNING:** This callback MUST NOT be re-entrant and MUST be marked `noexcept`. Throwing corrupts the order book state. |
+| `filled_out` | `Quantity*` | Optional. When non-null, receives the quantity that actually traded — so a partial fill is distinguishable from a full fill without summing the callbacks. Market-order remainders are discarded (IOC) and are *not* included in this figure. |
 
 **Returns:** `RejectReason`
 
@@ -251,7 +257,9 @@ Pops the top of the free-list stack and returns an index to the slot.
 | :--- | :--- |
 | `uint32_t` | Index to a pool-managed object. `INVALID_INDEX` if exhausted. |
 
-**Throws:** Nothing. Returns `INVALID_INDEX` when out of memory, leading to silent drops rather than throwing.
+**Throws:** Nothing. Returns `INVALID_INDEX` when the pool is exhausted;
+the engine turns that into `RejectReason::PoolExhausted` for the order
+rather than dropping it silently.
 
 **Complexity:** $O(1)$.
 
@@ -267,43 +275,94 @@ Returns a previously allocated object index back to the free-list.
 | :--- | :--- | :--- |
 | `idx` | `uint32_t` | Must be an index previously returned by `allocate()`. |
 
-**Throws:**
-- `std::out_of_range` if `idx >= pool_data_.size()` (Debug or `HFT_AUDIT_MODE` only).
-- `std::logic_error` if the slot is already free (double-free detection via allocation byte-tracking vector, Debug or `HFT_AUDIT_MODE` only).
+**Throws:** Nothing — never, in any build flavor. The pool is
+exception-free by design so it behaves identically under Release's
+`-fno-exceptions`.
+
+- **Debug / Audit:** the index is range-checked and the slot's state
+  stamp is verified. A double free, a wild free or an out-of-range
+  index invokes the installed `PoolFaultHandler`; with no handler
+  installed (the default) the pool prints a diagnostic and aborts
+  deterministically. A handler that returns `FaultAction::SkipOperation`
+  makes the call return without mutating the pool, which is what makes
+  these paths unit-testable.
+- **Release:** the guards are compiled out entirely. The index must come
+  from book state — the release contract is documented trust. Run the
+  Audit flavor to verify that invariant.
 
 **Complexity:** $O(1)$.
+
+#### `deallocate_chain`
+
+```cpp
+void deallocate_chain(uint32_t head, uint32_t tail);
+```
+
+Returns an entire price level's queue to the free list in a single
+splice: the intrusive order chain becomes the free-list continuation.
+This is the bulk-teardown path behind the batch-match speedup, and the
+pool's most fragile operation.
+
+| Parameter | Type | Description |
+| :--- | :--- | :--- |
+| `head` | `uint32_t` | First slot of the chain. |
+| `tail` | `uint32_t` | Last slot of the chain. |
+
+**Debug / Audit:** both endpoints are range-checked *before* any write,
+and every walked slot's state stamp is verified — so an out-of-range
+index can never become a heap-buffer-overflow write. A broken chain is
+reported at the slot that carries it, before the free-list splice
+happens; the slots already walked are released by then, so the pool is
+left partially released. The default fault handler aborts, so that
+partial state is only observable under a test handler that returns
+`FaultAction::SkipOperation`.
+
+**Complexity:** $O(chain length).
 
 #### Utility Methods
 
 | Signature | Returns | Description |
 | :--- | :--- | :--- |
 | `size_t capacity() const noexcept` | Total pool capacity. | |
-| `bool is_allocated(uint32_t idx) const noexcept` | `true` if the index is currently marked as allocated. | |
+| `bool is_allocated(uint32_t idx) const noexcept` | `true` if the index is currently marked as allocated. In Release this degenerates to a bounds check — a real answer requires Debug/Audit. | |
 | `T* data() noexcept` | Raw pointer to the underlying continuous memory array. | |
 
 ---
-
 ## 6. Macros
 
-### `HFT_ASSUME(cond)`
+### `HFT_DEBUG_TOOLS`
 
-Defined in `Macros.h`. A safety-aware compiler optimization hint.
+The single switch that gates every debugging aid in the library
+(`src/Macros.h`). Defined as `1` when `NDEBUG` is undefined (Debug) or
+`HFT_AUDIT_MODE` is defined (Audit), and `0` in Release.
 
 | Build Mode | Expansion | Behavior |
 | :--- | :--- | :--- |
-| **Debug** (`!NDEBUG`) | `assert(cond)` | Hard crash with diagnostic if `cond` is false. |
-| **Release** (`NDEBUG`) | `__builtin_unreachable()` / `__assume(cond)` | Compiler eliminates dead code paths assuming `cond` is always true. Undefined Behavior if violated. |
-
-**Usage in engine:**
-
-```cpp
-HFT_ASSUME(id < order_map_.size());   // Elides bounds-check assembly in Release
-HFT_ASSUME(quantity > 0);             // Elides zero-check assembly in Release
-```
+| **Debug** (`!NDEBUG`) | `1` | Slot stamps, poison patterns, generation counters, allocation tracking, the event journal, the re-entrancy/thread latches and `validate_book()` are all compiled in. |
+| **Audit** (`-DHFT_AUDIT_MODE`) | `1` | The same aids, at `-O2` — memory-safety verification on optimized code. |
+| **Release** (`NDEBUG`) | `0` | All aids compile out. `MemoryPool::deallocate` trusts its argument; the release contract is documented trust. |
 
 ### `HFT_AUDIT_MODE`
 
-A compile-time macro (`-DHFT_AUDIT_MODE`) that forces the `MemoryPool` allocation bitmap to remain active even in Release builds (`NDEBUG`). This provides $O(1)$ double-free and bounds-checking validation with minor memory and performance overhead, intended for shadow/staging environments.
+A compile-time macro (`-DHFT_AUDIT_MODE`) that forces the debugging aids
+to stay active even though `NDEBUG` is defined. It is the Audit build
+flavor: instrumented, optimized, no sanitizers — the gear that catches
+memory-safety bugs in code the optimizer actually shaped.
+
+### `HFT_FORCEINLINE`, `HFT_LIKELY`, `HFT_UNLIKELY`, `HFT_PREFETCH`
+
+Compiler built-ins with a portable MSVC fallback (`src/Macros.h`):
+`always_inline`, branch-probability hints, and a cache prefetch. On
+toolchains that are neither GCC/Clang nor MSVC the prefetch compiles to
+a no-op; the MSVC path uses `_mm_prefetch`, which is x86-only and
+approximates the read/write and locality arguments away.
+
+> **Note:** There is deliberately no `HFT_ASSUME` macro. An `assume`
+> expands to `__builtin_unreachable()` in release builds, and a verify
+> whose semantics are `return;` silently breaks value-returning
+> functions. Public-API preconditions are guarded with explicit early
+> returns carrying a `RejectReason` instead; the few *internal*
+> preconditions use `assert()`, which compiles out under `NDEBUG`.
 
 ---
 
@@ -315,3 +374,21 @@ A compile-time macro (`-DHFT_AUDIT_MODE`) that forces the `MemoryPool` allocatio
 This is a deliberate design decision. In production HFT systems, the matching engine runs on an isolated CPU core (`isolcpus` + `pthread_setaffinity_np`). Inter-thread communication is handled via lock-free SPSC (Single-Producer Single-Consumer) ring buffers on separate threads — never inside the matching loop itself.
 
 **Consequence:** Calling `add_order` or `cancel_order` concurrently from multiple threads results in **undefined behavior** (data races on `order_map_`, `MemoryPool`, and `PriceLevel` linked lists).
+
+### 7.1 Re-entrancy contract
+
+The single-thread rule is not enough on its own: a trade callback runs
+*inside* the matching loop, while the loop is holding raw pointers into
+pool storage. A callback that calls `add_order` or `cancel_order` on the
+same book would invalidate those pointers mid-match.
+
+**Rule:** a trade callback MUST NOT call `add_order` or `cancel_order` on
+the same `OrderBook` instance, directly or indirectly.
+
+Debug and Audit builds enforce this with a re-entrancy latch. The
+violation is reported through the `BookFaultHandler`; with no handler
+installed (the default) the book prints a diagnostic and aborts
+deterministically. A handler that returns `FaultAction::SkipOperation`
+makes the nested call return `RejectReason::ReentrancyBlocked` instead
+of aborting, and the book stays internally consistent. Release trusts
+the contract by design.

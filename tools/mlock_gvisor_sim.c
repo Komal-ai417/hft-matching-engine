@@ -1,4 +1,7 @@
 /*
+ * SPDX-License-Identifier: MIT
+ * Copyright (c) 2026 Karyampudi Komal
+ *
  * mlock_gvisor_sim.c — LD_PRELOAD runtime that simulates gVisor-style
  * locked-memory behavior for the hft_engine smoke matrix.
  *

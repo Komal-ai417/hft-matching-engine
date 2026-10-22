@@ -44,11 +44,12 @@ To achieve consistent validation of hardware sympathy, benchmarks were run insid
 High IPC (Instructions Per Cycle) relies heavily on predictable branch execution. In a naive matching engine, checking `if (side == Buy)` inside the hot matching loop causes consistent branch mispredictions, stalling the CPU pipeline for 15-20 cycles.
 
 ### The Technique: Template Specialization
-We eradicated branch overhead from the core logic by templating the `match_order` function:
+We eradicated branch overhead from the core logic by templating the `match_order_direct` function on the side:
 
 ```cpp
 template <Side side, typename TradeCallback>
-[[gnu::always_inline]] inline void match_order(Order* taker_order, TradeCallback&& on_trade) {
+HFT_ENGINE_INLINE void match_order_direct(OrderId taker_id, Price taker_price, Quantity& taker_quantity,
+                                           TradeCallback&& on_trade) {
     if constexpr (side == Side::Buy) {
         // Cross against Asks (Compile-time resolution)
     } else {
@@ -58,8 +59,14 @@ template <Side side, typename TradeCallback>
 ```
 
 **Profiling Impact:**
-- **Branch Miss Rate:** Reduced to near 0.01% in the hot-loop. 
-- **Instruction Density:** By embedding C++23 `[[assume(quantity > 0)]]` attributes, the compiler actively strips out bounds-checking and zero-validation assembly, condensing the machine code to maximize L1i (Instruction Cache) residency.
+- **Branch Miss Rate:** Reduced to near 0.01% in the hot-loop.
+- **Instruction Density:** input validation is a flat sequence of early
+  returns carrying a `RejectReason` — no exception path, and no
+  `[[assume]]` attribute in the release build. (An `assume` expands to
+  `__builtin_unreachable()` in release builds, and a verify whose semantics
+  are `return;` silently breaks value-returning functions, so the engine
+  deliberately avoids both. The few *internal* preconditions use
+  `assert()`, which compiles out under `NDEBUG`.)
 
 ---
 
@@ -68,7 +75,7 @@ template <Side side, typename TradeCallback>
 Modern CPU cache misses to main memory cost roughly ~100 nanoseconds. Therefore, achieving `~10 ns` passive insertion latency mathematically proves an extremely high L1/L2 cache hit rate (>99.5%).
 
 ### The $O(1)$ Flat Array Locator
-Instead of `std::map` or `std::unordered_map` (which allocate disjointed heap nodes and cause immediate L3 cache thrashing), we utilize a dense, flat `std::vector<Order*>` pre-sized to `1,000,000` pointers. Lookup by `OrderId` maps directly to a sequential memory address.
+Instead of `std::map` or `std::unordered_map` (which allocate disjointed heap nodes and cause immediate L3 cache thrashing), we utilize a dense, flat `std::vector<uint32_t> order_map_` pre-sized to the order-id limit. Lookup by `OrderId` maps directly to a sequential memory address.
 
 ### Compact Intrusive Linked Lists
 Standard `std::list<Order>` requires an internal node pointer and heap allocations per insert. We solved this by defining our orders as intrusive:

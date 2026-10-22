@@ -1,5 +1,10 @@
+// SPDX-License-Identifier: MIT
+// Copyright (c) 2026 Karyampudi Komal
+//
 // ============================================================================
-// Differential fuzz: engine vs StdOrderBook reference.
+// test_differential_fuzz.cpp — engine vs StdOrderBook parity under
+// randomized operation streams, across seven adversarial book geometries.
+//
 // Both books receive identical pseudo-random operation streams; after EVERY
 // operation the result code, filled quantity, full trade vector (maker/taker/
 // price/qty, in order) and resting-count must match. At round end, exhaustive

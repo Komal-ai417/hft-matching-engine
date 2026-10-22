@@ -1,3 +1,7 @@
+// SPDX-License-Identifier: MIT
+// Copyright (c) 2026 Karyampudi Komal
+//
+// ============================================================================
 // main.cpp — the hft_engine smoke/benchmark binary.
 //
 // ============================================================================

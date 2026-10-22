@@ -1,3 +1,10 @@
+// SPDX-License-Identifier: MIT
+// Copyright (c) 2026 Karyampudi Komal
+//
+// ============================================================================
+// StdOrderBook.h — a deliberately standard-library-based order book used
+// both as the benchmark baseline and as the differential-testing oracle.
+// ============================================================================
 #pragma once
 
 #include <algorithm>

@@ -1,3 +1,7 @@
+// SPDX-License-Identifier: MIT
+// Copyright (c) 2026 Karyampudi Komal
+//
+// ============================================================================
 // MemoryPool.h
 // Provides a zero-dynamic-allocation memory pool for the HFT OrderBook.
 // By allocating a huge slab of memory up front on startup, we avoid
@@ -176,9 +180,19 @@ class MemoryPool {
     static_assert(std::is_trivially_destructible_v<T>,
                   "MemoryPool<T>: slots are returned to the free list without running destructors — T must be "
                   "trivially destructible.");
-    static_assert(std::is_trivially_default_constructible_v<T> ||
-                  true);  // documentation-only; placement value-init happens in debug allocate()
+    static_assert(std::is_default_constructible_v<T>,
+                  "MemoryPool<T>: the pool vector is value-initialized by resize() in every build, and debug "
+                  "allocate() placement-news a fresh T — T must be default constructible.");
 
+    /**
+     * @brief Constructs a pool of `max_capacity` pre-allocated slots.
+     * @param max_capacity  Number of slots to reserve; clamped to
+     *        `0xFFFF'FFFE` because slot indices are `uint32_t` and
+     *        `INVALID_INDEX` is reserved.
+     *
+     * Every page is faulted in here, at construction, so no page fault can
+     * land on the hot path.
+     */
     explicit MemoryPool(size_t max_capacity)
         : capacity_(max_capacity > detail::kMaxPoolCapacity ? detail::kMaxPoolCapacity
                                                             : max_capacity)  // indices are uint32
@@ -236,8 +250,14 @@ class MemoryPool {
     MemoryPool(MemoryPool&&) noexcept = default;        // vector relocation keeps indices valid.
     MemoryPool& operator=(MemoryPool&&) noexcept = default;
 
-    // Allocate an object from the pool via intrusive free-list pop.
-    // O(1), no branching on the happy path.
+    /**
+     * @brief Takes a slot from the free list.
+     * @return The slot index, or `INVALID_INDEX` when the pool is exhausted
+     *         (the caller decides how to react — the engine rejects with
+     *         `RejectReason::PoolExhausted`).
+     *
+     * O(1), no branching on the happy path.
+     */
     HFT_FORCEINLINE uint32_t allocate() noexcept {
         if (HFT_UNLIKELY(free_head_ == INVALID_INDEX)) {
             return INVALID_INDEX;  // Pool exhausted — caller decides (engine rejects with PoolExhausted)
@@ -263,7 +283,13 @@ class MemoryPool {
         return idx;
     }
 
-    // Return an object to the pool via intrusive free-list push.
+    /**
+     * @brief Returns a slot to the free list.
+     * @param index  Slot index previously returned by allocate().
+     *
+     * Instrumented builds detect out-of-range indices, double frees and wild
+     * frees via slot state stamps; the faults are exception-free.
+     */
 #if HFT_DEBUG_TOOLS
     // Instrumented deallocate: detects out-of-range indices, double frees and
     // wild frees via slot state stamps. Faults are exception-free.
@@ -308,14 +334,17 @@ class MemoryPool {
     }
 #endif
 
-    // Return a whole chain of objects [head .. tail] (an entire price level's
-    // queue) to the pool in one splice: the intrusive order chain BECOMES the
-    // free-list continuation. This is the bulk-teardown path credited with the
-    // ~20x batch-match speedup, and it is the pool's most fragile operation.
+    /**
+     * @brief Returns a whole chain of objects [head .. tail] to the pool in
+     * one splice: the intrusive order chain BECOMES the free-list continuation.
+     *
+     * This is the bulk-teardown path credited with the ~20x batch-match
+     * speedup, and the pool's most fragile operation.
+     */
 #if HFT_DEBUG_TOOLS
-    // Instrumented chain free: validates head and tail BEFORE any write,
-    // verifies each walked slot's state, and walks the overlay link (not
-    // T::next) so the template stays generic.
+    // Instrumented chain free: range-checks head and tail BEFORE the first
+    // write, verifies each walked slot's state, and walks the overlay link
+    // (not T::next) so the template stays generic.
     void deallocate_chain(uint32_t head, uint32_t tail) {
         if (HFT_UNLIKELY(head >= capacity_ || tail >= capacity_)) {
             if (detail::pool_fault("MemoryPool::deallocate_chain: head/tail index out of range",
@@ -325,7 +354,12 @@ class MemoryPool {
             }
         }
 
-        // Validate the whole chain first — no mutation before every link checks out.
+        // Validate and release each slot in turn. A slot is checked BEFORE it
+        // is mutated, so a corrupt link is caught at the slot that carries it
+        // — but the slots already walked are released by the time that
+        // happens, and the free-list splice below is skipped. The default
+        // fault handler aborts, so this partial state is only observable
+        // under a test handler that returns SkipOperation.
         uint32_t cur = head;
         while (true) {
             if (HFT_UNLIKELY(!allocated_[cur] || slot_state_[cur] != static_cast<uint8_t>(SlotState::Live))) {

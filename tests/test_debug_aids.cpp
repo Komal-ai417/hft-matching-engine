@@ -1,8 +1,10 @@
+// SPDX-License-Identifier: MIT
+// Copyright (c) 2026 Karyampudi Komal
+//
 // ============================================================================
-// Debugging-aids tests: the event journal, the re-entrancy latch, the
-// thread-identity latch and the fault-handler plumbing that makes both
-// latches testable. All Debug/Audit-only (Release compiles the aids out by
-// design — the RELEASE_NO_TOOLS test below pins that).
+// test_debug_aids.cpp — the Debug/Audit instrumentation: event journal,
+// re-entrancy latch, thread-identity latch and the fault-handler plumbing
+// that makes both latches testable.
 // ============================================================================
 
 #include <gtest/gtest.h>

@@ -1,3 +1,11 @@
+// SPDX-License-Identifier: MIT
+// Copyright (c) 2026 Karyampudi Komal
+//
+// ============================================================================
+// OrderBook.h — the public API of the matching engine: price-time-priority
+// limit order book with O(1) price-level access, two-level bitset best-price
+// tracking and a zero-allocation memory pool.
+// ============================================================================
 #pragma once
 
 #include <algorithm>
@@ -17,6 +25,12 @@
 
 namespace hft {
 
+/**
+ * @enum RejectReason
+ * @brief Why an order operation was refused. Every validation failure maps
+ * to exactly one value; `Accepted` means the operation succeeded (fully or
+ * partially).
+ */
 enum class RejectReason : uint8_t {
     Accepted = 0,
     InvalidQuantity,
@@ -29,11 +43,17 @@ enum class RejectReason : uint8_t {
     ReentrancyBlocked   ///< debug latch (re-entrancy or cross-thread call) blocked the operation.
 };
 
+/**
+ * @struct Trade
+ * @brief A single fill, delivered to the caller's callback the moment it
+ * happens. The execution price is always the maker's price, per
+ * price-time priority.
+ */
 struct Trade {
-    OrderId maker_id;
-    OrderId taker_id;
-    Price price;
-    Quantity quantity;
+    OrderId maker_id;   ///< The resting order that was filled.
+    OrderId taker_id;   ///< The incoming order that crossed the spread.
+    Price price;        ///< Execution price (the maker's price).
+    Quantity quantity;  ///< Quantity executed in this fill.
 };
 
 /// Fault handler for OrderBook debug latches (re-entrancy / thread contract).
@@ -115,7 +135,26 @@ inline constexpr size_t kFaultMessageBytes = 128;            // latch-fault mess
  */
 class OrderBook {
    public:
+    /**
+     * @brief Constructs a book with a fixed price range and capacity.
+     *
+     * @param max_order_id      Largest accepted order id (ids are 1-based).
+     * @param max_active_orders Capacity of the order pool (max resting orders).
+     * @param min_price         Lowest valid price tick (inclusive).
+     * @param max_price         Highest valid price tick (inclusive).
+     *
+     * All storage is reserved up front, so nothing allocates after
+     * construction. Invalid arguments abort with a diagnostic on stderr
+     * rather than throwing — the behaviour is identical in every build
+     * flavor.
+     *
+     * The order-id map and the price-level arrays are sized from these
+     * arguments, so a book with a wide price range or a large id space
+     * reserves correspondingly more memory up front.
+     */
     OrderBook(size_t max_order_id, size_t max_active_orders, Price min_price, Price max_price);
+
+    /// Convenience overload: pool capacity equals the order-id limit.
     OrderBook(size_t max_orders, Price min_price, Price max_price)
         : OrderBook(max_orders, max_orders, min_price, max_price) {}
 
@@ -127,10 +166,17 @@ class OrderBook {
 
     /**
      * @brief Adds an order to the book (Limit/Market) or cancels one (Cancel).
+     *
+     * @param id        Unique order id; must be in `[1, max_order_id]`.
+     * @param type      Limit, Market or Cancel.
+     * @param price     Limit price in ticks. Ignored for Market and Cancel.
+     * @param quantity  Order size; must be > 0. Ignored for Cancel.
+     * @param side      Buy or Sell. Ignored for Cancel.
      * @param on_trade  Callback invoked per fill. Must be noexcept (static_assert).
      * @param filled_out Optional out-parameter: how much of `quantity` actually
      *        traded, so a partial fill is distinguishable from a full fill
      *        without summing the callbacks.
+     * @return `Accepted` on success, otherwise the reason the order was refused.
      *
      * WARNING: Trade callbacks MUST NOT be re-entrant. You cannot call add_order or
      * cancel_order from within the on_trade callback on the same OrderBook instance.
@@ -141,12 +187,21 @@ class OrderBook {
                                                            Side side, TradeCallback&& on_trade,
                                                            Quantity* filled_out = nullptr);
 
+    /**
+     * @brief Cancels a resting order by id.
+     * @param id  Id of the order to remove.
+     * @return `Accepted` on success, `OutOfBoundsOrderId` if the id is
+     *         outside `[1, max_order_id]`, `CancelFailed` if no order with
+     *         that id is resting.
+     */
     [[nodiscard]] HFT_ENGINE_INLINE RejectReason cancel_order(OrderId id);
 
     // ────────────────────────────────────────────────────────────────
     // Introspection API — cheap accessors available in every build flavor.
     // ────────────────────────────────────────────────────────────────
+    /// True when at least one bid rests in the book.
     [[nodiscard]] bool has_bids() const noexcept { return has_bids_; }
+    /// True when at least one ask rests in the book.
     [[nodiscard]] bool has_asks() const noexcept { return has_asks_; }
 
     /// Best bid price. Valid only when has_bids(); returns 0 otherwise.
@@ -154,6 +209,7 @@ class OrderBook {
     /// Best ask price. Valid only when has_asks(); returns max_price()+1 otherwise.
     [[nodiscard]] Price best_ask() const noexcept { return best_ask_; }
 
+    /// True when an order with this id is currently resting.
     [[nodiscard]] bool order_exists(OrderId id) const noexcept {
         return id != 0 && id <= max_order_id_ && order_map_[id] != INVALID_INDEX;
     }

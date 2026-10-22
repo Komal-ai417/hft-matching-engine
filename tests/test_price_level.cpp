@@ -1,8 +1,12 @@
+// SPDX-License-Identifier: MIT
+// Copyright (c) 2026 Karyampudi Komal
+//
 // ============================================================================
-// PriceLevel unit tests. Covers: append semantics (first/FIFO/totals/links),
-// remove semantics (head/middle/tail/sole), emptiness, the debug canary,
-// layout static_asserts, and a 2,000-op shadow-model property test that
-// verifies totals, count, FIFO content and BOTH link directions throughout.
+// test_price_level.cpp — PriceLevel unit tests. Covers: append semantics
+// (first/FIFO/totals/links), remove semantics (head/middle/tail/sole),
+// emptiness, the debug canary, layout static_asserts, and a 2,000-op
+// shadow-model property test that verifies totals, count, FIFO content and
+// BOTH link directions throughout.
 // ============================================================================
 
 #include <gtest/gtest.h>

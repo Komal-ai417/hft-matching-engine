@@ -1,3 +1,10 @@
+// SPDX-License-Identifier: MIT
+// Copyright (c) 2026 Karyampudi Komal
+//
+// ============================================================================
+// Macros.h — compiler built-ins and the single HFT_DEBUG_TOOLS switch that
+// gates every debugging aid in the library.
+// ============================================================================
 #pragma once
 
 // ============================================================================
@@ -85,8 +92,10 @@ namespace hft {
 
 }  // namespace hft
 
-// Preconditions are guarded with explicit early-returns carrying a
-// RejectReason (see OrderBook::add_order) — no UB, fully testable. Assume/verify
-// style macros are deliberately absent: an assume expands to
-// __builtin_unreachable() in release builds, and a verify whose semantics are
-// `return;` silently breaks value-returning functions.
+// Public-API preconditions are guarded with explicit early-returns
+// carrying a RejectReason (see OrderBook::add_order) — no UB, fully
+// testable. The few internal preconditions use assert(), which compiles
+// out under NDEBUG. Assume/verify style macros are deliberately absent: an
+// assume expands to __builtin_unreachable() in release builds, and a
+// verify whose semantics are `return;` silently breaks value-returning
+// functions.
