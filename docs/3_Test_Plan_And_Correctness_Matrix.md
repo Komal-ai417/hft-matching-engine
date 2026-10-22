@@ -31,7 +31,7 @@ Because the engine manages custom memory layouts, the CI pipeline integrates LLV
 
 ### Stress Testing
 
-- **`AllocDeallocCycleStress`**: Exercises `MemoryPool` integrity with 1,000,000 insert+cancel cycles against a 10-slot pool, then asserts `active_order_count() == 0`, `price_level_count() == 0`, ID non-existence and that the book still accepts new orders (see `tests/test_ob.cpp`).
+- **`AllocDeallocCycleStress`**: Exercises `MemoryPool` integrity with 1,000,000 insert+cancel cycles against a 10-slot pool, then asserts `active_order_count() == 0`, `price_level_count(Side::Sell) == 0`, ID non-existence and that the book still accepts new orders (see `tests/test_ob.cpp`).
 - **`ExhaustPoolSilentDrop`**: Evaluates exhaustion handling. When the pool is full, the order is rejected with `RejectReason::PoolExhausted` — no exception, no allocation, and no residue left in the book.
 
 ### The `libc++` Mismatch Resolution

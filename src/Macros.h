@@ -92,9 +92,9 @@ namespace hft {
 
 }  // namespace hft
 
-// Public-API preconditions are guarded with explicit early-returns
-// carrying a RejectReason (see OrderBook::add_order) — no UB, fully
-// testable. The few internal preconditions use assert(), which compiles
+// OrderBook's public order-entry preconditions are guarded with explicit
+// early-returns carrying a RejectReason (see OrderBook::add_order) — no UB,
+// fully testable. The few internal preconditions use assert(), which compiles
 // out under NDEBUG. Assume/verify style macros are deliberately absent: an
 // assume expands to __builtin_unreachable() in release builds, and a
 // verify whose semantics are `return;` silently breaks value-returning

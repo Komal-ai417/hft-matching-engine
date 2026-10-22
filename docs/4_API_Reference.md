@@ -311,11 +311,14 @@ pool's most fragile operation.
 **Debug / Audit:** both endpoints are range-checked *before* any write,
 and every walked slot's state stamp is verified — so an out-of-range
 index can never become a heap-buffer-overflow write. A broken chain is
-reported at the slot that carries it, before the free-list splice
-happens; the slots already walked are released by then, so the pool is
-left partially released. The default fault handler aborts, so that
-partial state is only observable under a test handler that returns
-`FaultAction::SkipOperation`.
+reported before the free-list splice happens; the slots already walked
+are released by then, so the pool is left partially released. The
+default fault handler aborts, so that partial state is only observable
+under a test handler that returns `FaultAction::SkipOperation`.
+
+The two faults report different indices: a not-live slot is reported at
+that slot, a broken link is reported at the tail (the corrupt link
+itself lives in the predecessor's overlay bytes).
 
 **Complexity:** $O(chain length).
 
@@ -357,12 +360,20 @@ toolchains that are neither GCC/Clang nor MSVC the prefetch compiles to
 a no-op; the MSVC path uses `_mm_prefetch`, which is x86-only and
 approximates the read/write and locality arguments away.
 
+`HFT_ENGINE_INLINE` — used by the `OrderBook` public API — is defined
+in `src/OrderBook.h`, not in `src/Macros.h`: it expands to plain
+`inline` in instrumented builds (where the journal writes and latch
+objects exceed a profitable `always_inline` budget) and to
+`HFT_FORCEINLINE` in Release.
+
 > **Note:** There is deliberately no `HFT_ASSUME` macro. An `assume`
 > expands to `__builtin_unreachable()` in release builds, and a verify
 > whose semantics are `return;` silently breaks value-returning
-> functions. Public-API preconditions are guarded with explicit early
-> returns carrying a `RejectReason` instead; the few *internal*
-> preconditions use `assert()`, which compiles out under `NDEBUG`.
+> functions. OrderBook's public order-entry preconditions are guarded
+> with explicit early returns carrying a `RejectReason` instead; the few
+> *internal* preconditions use `assert()`, which compiles out under
+> `NDEBUG`. (The `MemoryPool` public API is the exception: its
+> preconditions abort through the fault handler, as documented above.)
 
 ---
 

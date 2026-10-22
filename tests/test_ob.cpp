@@ -472,7 +472,8 @@ TEST(OrderBookTest, PoolExhaustionRecovery) {
 // MEMORY POOL DOUBLE-FREE DETECTION
 //   The pool's own double-free / out-of-range / chain tests live in
 //   test_memory_pool.cpp (exception-free fault-handler semantics). These
-//   variants keep coverage of the pool through the OrderBook API.
+//   variants exercise MemoryPool<Order> directly, mirroring the same
+//   fault-handler semantics.
 // ============================================================
 
 #if HFT_DEBUG_TOOLS

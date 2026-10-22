@@ -13,11 +13,9 @@
 #include <windows.h>
 #endif
 
-#include <cassert>
 #include <cstdio>
 #include <cstdlib>
 #include <limits>
-#include <stdexcept>
 
 namespace hft {
 

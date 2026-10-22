@@ -355,11 +355,14 @@ class MemoryPool {
         }
 
         // Validate and release each slot in turn. A slot is checked BEFORE it
-        // is mutated, so a corrupt link is caught at the slot that carries it
+        // is mutated, so a corrupt link is caught at the slot that holds it
         // — but the slots already walked are released by the time that
         // happens, and the free-list splice below is skipped. The default
         // fault handler aborts, so this partial state is only observable
-        // under a test handler that returns SkipOperation.
+        // under a test handler that returns SkipOperation. Note the two
+        // faults report different indices: a not-live slot is reported at
+        // that slot, a broken link is reported at the tail (the corrupt
+        // link itself lives in the predecessor's overlay bytes).
         uint32_t cur = head;
         while (true) {
             if (HFT_UNLIKELY(!allocated_[cur] || slot_state_[cur] != static_cast<uint8_t>(SlotState::Live))) {

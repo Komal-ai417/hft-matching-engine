@@ -66,16 +66,19 @@ The `MemoryPool` pre-allocates an array of `N` `Order` structs inside a single c
 ```mermaid
 graph TD
     subgraph Initialization ["Boot Up"]
-        A["1. vector allocates N Order structs"] --> B["2. free_head_ = 0"]
-        B --> C["3. slot 0 next = 1"]
-        C --> D["4. slot 1 next = 2"]
-        D --> E["5. ... until slot N-1 next = INVALID_INDEX"]
+        A["1. vector allocates N Order structs"] --> B["2. link slot N-1 next = INVALID_INDEX"]
+        B --> C["3. link slot N-2 next = N-1"]
+        C --> D["4. ... down to slot 0 next = 1"]
+        D --> E["5. free_head_ = 0 (set last)"]
     end
 ```
 
 The free-list link is overlaid on the **first 4 bytes** of each slot
 (`Order::next`), accessed through `std::memcpy` so there is no
-strict-aliasing violation.
+strict-aliasing violation. The constructor walks the slots top-down, so
+the chain is built in descending index order and `free_head_` ends up
+pointing at slot 0 — the opening burst of allocations therefore gets
+ascending, cache-friendly indices.
 
 ### Allocation Flow ($O(1)$)
 When an order arrives, `engine` calls `pool.allocate()`:
@@ -100,4 +103,4 @@ When an order executes or cancels:
 book state. The Audit flavor exists to verify that invariant, and CI
 runs it before any Release artifact ships.
 
-This technique completely bypasses the OS `malloc`/`free` global locks: the free-list head and the slot index stay in registers, and the links themselves live in the pool's own memory.
+This technique completely bypasses the OS `malloc`/`free` global locks: the free-list head and the slot index are the only two values the hot path touches, and the links themselves live in the pool's own memory.
