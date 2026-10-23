@@ -176,9 +176,11 @@ int main() {
         std::cout << "[0] Warming up the engine (I-Cache and Branch Predictors)...\n";
         hft::OrderBook warmup(kWarmupOps + kIdHeadroom, 0, kWarmupMaxPrice);
         for (std::uint64_t i = 1; i <= kWarmupOps; ++i) {
-            (void)warmup.add_order(i, hft::OrderType::Limit, kBasePrice + (i % kWarmupSpread), kDemoQty,
-                                   hft::Side::Sell, [](const auto&) noexcept {});
-            (void)warmup.add_order(i, hft::OrderType::Cancel, 0, 0, hft::Side::Buy, [](const auto&) noexcept {});
+            (void)warmup.add_order(static_cast<hft::OrderId>(i), hft::OrderType::Limit,
+                                   static_cast<hft::Price>(kBasePrice + (i % kWarmupSpread)), kDemoQty, hft::Side::Sell,
+                                   [](const auto&) noexcept {});
+            (void)warmup.add_order(static_cast<hft::OrderId>(i), hft::OrderType::Cancel, 0, 0, hft::Side::Buy,
+                                   [](const auto&) noexcept {});
         }
         std::cout << "    Warmup complete.\n\n";
     }
@@ -196,7 +198,8 @@ int main() {
         const auto start = std::chrono::high_resolution_clock::now();
 
         for (std::uint64_t i = 1; i <= kInsertOps; ++i) {
-            (void)ob.add_order(i, hft::OrderType::Limit, kBasePrice + (i % kWarmupSpread), kDemoQty, hft::Side::Sell,
+            (void)ob.add_order(static_cast<hft::OrderId>(i), hft::OrderType::Limit,
+                               static_cast<hft::Price>(kBasePrice + (i % kWarmupSpread)), kDemoQty, hft::Side::Sell,
                                [](const auto&) noexcept {});
         }
 
@@ -214,8 +217,9 @@ int main() {
 
         // Seed the book
         for (std::uint64_t i = 1; i <= kMatchSeedOrders; ++i) {
-            (void)ob.add_order(i, hft::OrderType::Limit, kBasePrice + (i % kSeedSpreadNarrow), kDemoQty,
-                               hft::Side::Sell, [](const auto&) noexcept {});
+            (void)ob.add_order(static_cast<hft::OrderId>(i), hft::OrderType::Limit,
+                               static_cast<hft::Price>(kBasePrice + (i % kSeedSpreadNarrow)), kDemoQty, hft::Side::Sell,
+                               [](const auto&) noexcept {});
         }
 
         std::cout << "[2] Pure Matching: " << kMatchTakerOrders << " aggressive buy orders against " << kMatchSeedOrders
@@ -224,8 +228,10 @@ int main() {
 
         const std::uint64_t start_id = kMatchSeedOrders + 1;
         for (std::uint64_t i = 0; i < kMatchTakerOrders; ++i) {
-            (void)ob.add_order(start_id + i, hft::OrderType::Limit, kTakerPrice, kDemoQty, hft::Side::Buy,
-                               [](const auto&) noexcept {});
+            // Narrowing cast is explicit: ids are demo-bounded, well below
+            // the uint32 OrderId range (silences C4267-class conversions).
+            (void)ob.add_order(static_cast<hft::OrderId>(start_id + i), hft::OrderType::Limit, kTakerPrice, kDemoQty,
+                               hft::Side::Buy, [](const auto&) noexcept {});
         }
 
         const auto end = std::chrono::high_resolution_clock::now();
@@ -242,7 +248,8 @@ int main() {
 
         // Seed
         for (std::uint64_t i = 1; i <= kCancelOps; ++i) {
-            (void)ob.add_order(i, hft::OrderType::Limit, kBasePrice + (i % kSeedSpreadWide), kDemoQty, hft::Side::Sell,
+            (void)ob.add_order(static_cast<hft::OrderId>(i), hft::OrderType::Limit,
+                               static_cast<hft::Price>(kBasePrice + (i % kSeedSpreadWide)), kDemoQty, hft::Side::Sell,
                                [](const auto&) noexcept {});
         }
 
@@ -250,7 +257,8 @@ int main() {
         const auto start = std::chrono::high_resolution_clock::now();
 
         for (std::uint64_t i = 1; i <= kCancelOps; ++i) {
-            (void)ob.add_order(i, hft::OrderType::Cancel, 0, 0, hft::Side::Buy, [](const auto&) noexcept {});
+            (void)ob.add_order(static_cast<hft::OrderId>(i), hft::OrderType::Cancel, 0, 0, hft::Side::Buy,
+                               [](const auto&) noexcept {});
         }
 
         const auto end = std::chrono::high_resolution_clock::now();
@@ -273,16 +281,19 @@ int main() {
             const std::uint64_t op = i % kMixCycleLen;
             if (op < kMixInsertCutoff) {
                 // Insert passive
-                (void)ob.add_order(id++, hft::OrderType::Limit, kBasePrice + (i % kMixSpread), kDemoQty,
-                                   hft::Side::Sell, [](const auto&) noexcept {});
+                (void)ob.add_order(static_cast<hft::OrderId>(id), hft::OrderType::Limit,
+                                   static_cast<hft::Price>(kBasePrice + (i % kMixSpread)), kDemoQty, hft::Side::Sell,
+                                   [](const auto&) noexcept {});
+                ++id;
             } else if (op < kMixMatchCutoff) {
                 // Aggressive match
-                (void)ob.add_order(id++, hft::OrderType::Limit, kMixTakerPrice, kDemoQty, hft::Side::Buy,
-                                   [](const auto&) noexcept {});
+                (void)ob.add_order(static_cast<hft::OrderId>(id), hft::OrderType::Limit, kMixTakerPrice, kDemoQty,
+                                   hft::Side::Buy, [](const auto&) noexcept {});
+                ++id;
             } else {
                 // Cancel a recent order
                 const std::uint64_t cancel_id = (id > kMixCancelLookback) ? id - kMixCancelLookback : 1;
-                (void)ob.add_order(cancel_id, hft::OrderType::Cancel, 0, 0, hft::Side::Buy,
+                (void)ob.add_order(static_cast<hft::OrderId>(cancel_id), hft::OrderType::Cancel, 0, 0, hft::Side::Buy,
                                    [](const auto&) noexcept {});
             }
         }

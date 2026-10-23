@@ -396,7 +396,11 @@ HFT_ENGINE_INLINE void OrderBook::match_order_direct(
 
             // ── Fast path: taker can consume the ENTIRE level ──
             if (taker_quantity >= level.total_quantity) {
-                Quantity level_qty = level.total_quantity;
+                // Lossless by construction: the guard above proves
+                // total_quantity <= taker_quantity <= Quantity max (the
+                // uint64 accumulator only exceeds uint32 for levels no
+                // single taker can ever consume, which take the slow path).
+                Quantity level_qty = static_cast<Quantity>(level.total_quantity);
                 const uint32_t maker_count = level.order_count;
                 uint32_t maker_order_idx = level.head;
 
@@ -505,7 +509,7 @@ HFT_ENGINE_INLINE void OrderBook::match_order_direct(
 
                     if (word != 0) {
                         best_ask_idx_ = word_idx * detail::kWordBits + std::countr_zero(word);
-                        best_ask_ = min_price_ + best_ask_idx_;
+                        best_ask_ = static_cast<Price>(min_price_ + best_ask_idx_);
                     } else {
                         has_asks_ = false;
                         best_ask_ = max_price_ + 1;               // price sentinel (guarded by has_asks_)
@@ -519,7 +523,7 @@ HFT_ENGINE_INLINE void OrderBook::match_order_direct(
                             size_t next_word_idx = summary_idx * detail::kWordBits + std::countr_zero(summary_word);
                             best_ask_idx_ =
                                 next_word_idx * detail::kWordBits + std::countr_zero(asks_bitset_ptr[next_word_idx]);
-                            best_ask_ = min_price_ + best_ask_idx_;
+                            best_ask_ = static_cast<Price>(min_price_ + best_ask_idx_);
                             has_asks_ = true;
                         } else {
                             for (size_t i = summary_idx + 1; i < asks_summary_size; ++i) {
@@ -528,7 +532,7 @@ HFT_ENGINE_INLINE void OrderBook::match_order_direct(
                                         i * detail::kWordBits + std::countr_zero(asks_summary_ptr[i]);
                                     best_ask_idx_ = next_word_idx * detail::kWordBits +
                                                     std::countr_zero(asks_bitset_ptr[next_word_idx]);
-                                    best_ask_ = min_price_ + best_ask_idx_;
+                                    best_ask_ = static_cast<Price>(min_price_ + best_ask_idx_);
                                     has_asks_ = true;
                                     break;
                                 }
@@ -550,7 +554,11 @@ HFT_ENGINE_INLINE void OrderBook::match_order_direct(
 
             // ── Fast path: taker can consume the ENTIRE level ──
             if (taker_quantity >= level.total_quantity) {
-                Quantity level_qty = level.total_quantity;
+                // Lossless by construction: the guard above proves
+                // total_quantity <= taker_quantity <= Quantity max (the
+                // uint64 accumulator only exceeds uint32 for levels no
+                // single taker can ever consume, which take the slow path).
+                Quantity level_qty = static_cast<Quantity>(level.total_quantity);
                 const uint32_t maker_count = level.order_count;
                 uint32_t maker_order_idx = level.head;
 
@@ -656,7 +664,7 @@ HFT_ENGINE_INLINE void OrderBook::match_order_direct(
 
                     if (word != 0) {
                         best_bid_idx_ = word_idx * detail::kWordBits + detail::kTopBitIndex - std::countl_zero(word);
-                        best_bid_ = min_price_ + best_bid_idx_;
+                        best_bid_ = static_cast<Price>(min_price_ + best_bid_idx_);
                     } else {
                         has_bids_ = false;
                         best_bid_ = 0;      // price sentinel (guarded by has_bids_)
@@ -670,7 +678,7 @@ HFT_ENGINE_INLINE void OrderBook::match_order_direct(
                                 summary_idx * detail::kWordBits + detail::kTopBitIndex - std::countl_zero(summary_word);
                             best_bid_idx_ = next_word_idx * detail::kWordBits + detail::kTopBitIndex -
                                             std::countl_zero(bids_bitset_ptr[next_word_idx]);
-                            best_bid_ = min_price_ + best_bid_idx_;
+                            best_bid_ = static_cast<Price>(min_price_ + best_bid_idx_);
                             has_bids_ = true;
                         } else {
                             for (int64_t i = static_cast<int64_t>(summary_idx) - 1; i >= 0; --i) {
@@ -679,7 +687,7 @@ HFT_ENGINE_INLINE void OrderBook::match_order_direct(
                                                            std::countl_zero(bids_summary_ptr[i]);
                                     best_bid_idx_ = next_word_idx * detail::kWordBits + detail::kTopBitIndex -
                                                     std::countl_zero(bids_bitset_ptr[next_word_idx]);
-                                    best_bid_ = min_price_ + best_bid_idx_;
+                                    best_bid_ = static_cast<Price>(min_price_ + best_bid_idx_);
                                     has_bids_ = true;
                                     break;
                                 }
@@ -704,7 +712,7 @@ HFT_ENGINE_INLINE void OrderBook::update_best_ask_after_remove(Price removed_pri
 
     if (word != 0) {
         best_ask_idx_ = word_idx * detail::kWordBits + std::countr_zero(word);
-        best_ask_ = min_price_ + best_ask_idx_;
+        best_ask_ = static_cast<Price>(min_price_ + best_ask_idx_);
         has_asks_ = true;
         return;
     }
@@ -719,7 +727,7 @@ HFT_ENGINE_INLINE void OrderBook::update_best_ask_after_remove(Price removed_pri
     if (summary_word != 0) {
         size_t next_word_idx = summary_idx * detail::kWordBits + std::countr_zero(summary_word);
         best_ask_idx_ = next_word_idx * detail::kWordBits + std::countr_zero(asks_bitset_ptr[next_word_idx]);
-        best_ask_ = min_price_ + best_ask_idx_;
+        best_ask_ = static_cast<Price>(min_price_ + best_ask_idx_);
         has_asks_ = true;
         return;
     }
@@ -728,7 +736,7 @@ HFT_ENGINE_INLINE void OrderBook::update_best_ask_after_remove(Price removed_pri
         if (asks_summary_ptr[i] != 0) {
             size_t next_word_idx = i * detail::kWordBits + std::countr_zero(asks_summary_ptr[i]);
             best_ask_idx_ = next_word_idx * detail::kWordBits + std::countr_zero(asks_bitset_ptr[next_word_idx]);
-            best_ask_ = min_price_ + best_ask_idx_;
+            best_ask_ = static_cast<Price>(min_price_ + best_ask_idx_);
             has_asks_ = true;
             return;
         }
@@ -749,7 +757,7 @@ HFT_ENGINE_INLINE void OrderBook::update_best_bid_after_remove(Price removed_pri
 
     if (word != 0) {
         best_bid_idx_ = word_idx * detail::kWordBits + detail::kTopBitIndex - std::countl_zero(word);
-        best_bid_ = min_price_ + best_bid_idx_;
+        best_bid_ = static_cast<Price>(min_price_ + best_bid_idx_);
         // The precondition guarantees has_bids_, but setting it here keeps the
         // state assignment locally complete so a future refactor cannot break
         // the invariant silently.
@@ -766,7 +774,7 @@ HFT_ENGINE_INLINE void OrderBook::update_best_bid_after_remove(Price removed_pri
         size_t next_word_idx = summary_idx * detail::kWordBits + detail::kTopBitIndex - std::countl_zero(summary_word);
         best_bid_idx_ =
             next_word_idx * detail::kWordBits + detail::kTopBitIndex - std::countl_zero(bids_bitset_ptr[next_word_idx]);
-        best_bid_ = min_price_ + best_bid_idx_;
+        best_bid_ = static_cast<Price>(min_price_ + best_bid_idx_);
         has_bids_ = true;
         return;
     }
@@ -776,7 +784,7 @@ HFT_ENGINE_INLINE void OrderBook::update_best_bid_after_remove(Price removed_pri
             size_t next_word_idx = i * detail::kWordBits + detail::kTopBitIndex - std::countl_zero(bids_summary_ptr[i]);
             best_bid_idx_ = next_word_idx * detail::kWordBits + detail::kTopBitIndex -
                             std::countl_zero(bids_bitset_ptr[next_word_idx]);
-            best_bid_ = min_price_ + best_bid_idx_;
+            best_bid_ = static_cast<Price>(min_price_ + best_bid_idx_);
             has_bids_ = true;
             return;
         }
@@ -888,14 +896,14 @@ template<typename TradeCallback>
 
     if (quantity == 0) [[unlikely]] {
         HFT_JOURNAL_REASON(OrderRejected, id, price, quantity, static_cast<uint8_t>(side),
-                    static_cast<uint8_t>(RejectReason::InvalidQuantity));
+                           static_cast<uint8_t>(RejectReason::InvalidQuantity));
         if (filled_out) *filled_out = 0;
         return RejectReason::InvalidQuantity;
     }
 
     if (id == 0 || id > max_order_id_) [[unlikely]] {
         HFT_JOURNAL_REASON(OrderRejected, id, price, quantity, static_cast<uint8_t>(side),
-                    static_cast<uint8_t>(RejectReason::OutOfBoundsOrderId));
+                           static_cast<uint8_t>(RejectReason::OutOfBoundsOrderId));
         if (filled_out) *filled_out = 0;
         return RejectReason::OutOfBoundsOrderId;
     }
@@ -903,7 +911,7 @@ template<typename TradeCallback>
     uint32_t* const order_map_ptr = order_map_.data();
     if (order_map_ptr[id] != INVALID_INDEX) [[unlikely]] {
         HFT_JOURNAL_REASON(OrderRejected, id, price, quantity, static_cast<uint8_t>(side),
-                    static_cast<uint8_t>(RejectReason::DuplicateOrderId));
+                           static_cast<uint8_t>(RejectReason::DuplicateOrderId));
         if (filled_out) *filled_out = 0;
         return RejectReason::DuplicateOrderId;
     }
@@ -916,7 +924,7 @@ template<typename TradeCallback>
     if (type == OrderType::Limit) {
         if (price < min_price_ || price > max_price_) {
             HFT_JOURNAL_REASON(OrderRejected, id, price, quantity, static_cast<uint8_t>(side),
-                        static_cast<uint8_t>(RejectReason::OutOfBoundsPrice));
+                               static_cast<uint8_t>(RejectReason::OutOfBoundsPrice));
             if (filled_out) *filled_out = 0;
             return RejectReason::OutOfBoundsPrice;
         }
@@ -929,7 +937,7 @@ template<typename TradeCallback>
         const bool opposite_empty = (side == Side::Buy) ? !has_asks_ : !has_bids_;
         if (HFT_UNLIKELY(opposite_empty)) {
             HFT_JOURNAL_REASON(OrderRejected, id, 0, quantity, static_cast<uint8_t>(side),
-                        static_cast<uint8_t>(RejectReason::MarketOnEmptyBook));
+                               static_cast<uint8_t>(RejectReason::MarketOnEmptyBook));
             if (filled_out) *filled_out = 0;
             return RejectReason::MarketOnEmptyBook;
         }

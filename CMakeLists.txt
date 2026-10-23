@@ -75,6 +75,17 @@ elseif(MSVC)
 endif()
 
 # ══════════════════════════════════════════════════════════════════
+# Windows: suppress the minwindef.h min/max macros project-wide. They
+# silently break std::numeric_limits<T>::max(), std::min and std::max in
+# any TU whose include chain reaches <windows.h> (ours do: MemoryPool.h,
+# OrderBook.cpp, real_world_sim.cpp). The public headers additionally
+# carry their own NOMINMAX guard for non-CMake consumers.
+# ══════════════════════════════════════════════════════════════════
+if(WIN32)
+    add_compile_definitions(NOMINMAX)
+endif()
+
+# ══════════════════════════════════════════════════════════════════
 # Dependencies — pinned to commit SHAs for reproducible/offline builds
 # (mutable tag floats were a supply-chain risk).
 # ══════════════════════════════════════════════════════════════════

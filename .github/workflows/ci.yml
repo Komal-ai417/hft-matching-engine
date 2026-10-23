@@ -715,9 +715,25 @@ jobs:
           [ -n "$PERFBIN" ] || PERFBIN="$(ls /usr/lib/linux-tools/*/perf 2>/dev/null | sort -V | tail -1 || true)"
           if [ -n "$PERFBIN" ]; then
             echo "PERFBIN=$PERFBIN" >> "$GITHUB_ENV"
-            # live probe so the log shows whether counters work in this VM
-            "$PERFBIN" stat -e task-clock,page-faults true 2>&1 | head -8 | tee perf-tool-probe.log
+            # Live probe so the log shows whether counters work in this VM.
+            # GitHub-hosted runners pin perf_event_paranoid=4 (all perf
+            # access denied to unprivileged processes) — the probe MUST
+            # degrade, never fail the job: the perf steps below gate on
+            # PERF_OK, and rdtsc + Google Benchmark + Cachegrind/Callgrind
+            # still deliver latency/cache/function coverage without PMU.
+            echo "perf_event_paranoid=$(cat /proc/sys/kernel/perf_event_paranoid 2>/dev/null || echo unknown)" \
+              | tee perf-tool-probe.log
+            if "$PERFBIN" stat -e task-clock,page-faults true >perf-probe.tmp 2>&1; then
+              echo "PERF_OK=1" >> "$GITHUB_ENV"
+              head -8 perf-probe.tmp | tee -a perf-tool-probe.log
+            else
+              echo "PERF_OK=0" >> "$GITHUB_ENV"
+              head -8 perf-probe.tmp | tee -a perf-tool-probe.log || true
+              echo "::warning::perf installed but counters BLOCKED (perf_event_paranoid too high — GitHub-hosted runners): perf stat/record/FlameGraph legs skip; rdtsc + benchmark + Cachegrind/Callgrind still cover latency, cache and function analysis"
+            fi
+            rm -f perf-probe.tmp
           else
+            echo "PERF_OK=0" >> "$GITHUB_ENV"
             echo "::warning::perf unavailable — perf stat/record legs degrade; Cachegrind/Callgrind still cover cache/branch/function analysis"
           fi
           numactl --hardware | tee perf-numa-topology.txt || true
@@ -768,7 +784,7 @@ jobs:
       - name: perf stat — hardware counters (cycles/IPC/cache/branch, -r 3)
         continue-on-error: true
         run: |
-          [ -n "${PERFBIN:-}" ] || { echo "::warning::perf unavailable"; exit 0; }
+          [ "${PERF_OK:-0}" = 1 ] || { echo "::warning::perf counters unavailable (not installed or blocked) — step skipped"; exit 0; }
           TS=(taskset -c 2); [ "$(nproc)" -lt 3 ] && TS=(taskset -c 0)
           set -o pipefail
           "${TS[@]}" "$PERFBIN" stat -r 3 \
@@ -782,7 +798,7 @@ jobs:
       - name: "perf stat — software counters (VM-safe: page-faults, ctx-switches, migrations)"
         continue-on-error: true
         run: |
-          [ -n "${PERFBIN:-}" ] || { echo "::warning::perf unavailable"; exit 0; }
+          [ "${PERF_OK:-0}" = 1 ] || { echo "::warning::perf counters unavailable (not installed or blocked) — step skipped"; exit 0; }
           TS=(taskset -c 2); [ "$(nproc)" -lt 3 ] && TS=(taskset -c 0)
           set -o pipefail
           "${TS[@]}" "$PERFBIN" stat \
@@ -794,7 +810,7 @@ jobs:
       - name: perf record + report + annotate (hot-path attribution)
         continue-on-error: true
         run: |
-          [ -n "${PERFBIN:-}" ] || { echo "::warning::perf unavailable"; exit 0; }
+          [ "${PERF_OK:-0}" = 1 ] || { echo "::warning::perf counters unavailable (not installed or blocked) — step skipped"; exit 0; }
           set -o pipefail
           TS=(taskset -c 2); [ "$(nproc)" -lt 3 ] && TS=(taskset -c 0)
           "${TS[@]}" "$PERFBIN" record -e cpu-clock -F 199 -g --call-graph fp \

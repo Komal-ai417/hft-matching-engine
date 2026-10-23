@@ -18,6 +18,13 @@
 #include <vector>
 
 #ifdef _WIN32
+// psapi.h pulls in <windows.h> itself (and the SDK's own ordering is
+// irrelevant here) — what matters is that NOMINMAX is defined BEFORE the
+// first header that reaches windows.h, otherwise the minwindef.h min/max
+// macros break std::min and numeric_limits in the engine headers below.
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
 #include <psapi.h>
 #include <windows.h>
 #endif

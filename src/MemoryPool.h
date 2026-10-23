@@ -49,6 +49,12 @@
 #if defined(__linux__)
 #include <sys/mman.h>
 #elif defined(_WIN32)
+// Guard every windows.h entry point: the minwindef.h min/max macros break
+// std::min/std::max and numeric_limits min()/max() in any TU that includes
+// this public header. (CMakeLists.txt defines NOMINMAX project-wide too.)
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
 #include <windows.h>
 #endif
 

@@ -23,7 +23,10 @@ using Price = uint32_t;
 using Quantity = uint32_t;
 
 /// Named constants for market order pricing — avoids fragile unsigned underflow hacks.
-constexpr Price MARKET_BUY_PRICE = std::numeric_limits<Price>::max();
+// Parenthesized (max)(): survives a consumer TU that included <windows.h>
+// without NOMINMAX before this header — the minwindef.h `max` macro cannot
+// expand through the enclosing parentheses.
+constexpr Price MARKET_BUY_PRICE = (std::numeric_limits<Price>::max)();
 constexpr Price MARKET_SELL_PRICE = 0;
 
 /// Sentinel for "no such index" in the order map, the price levels and the

@@ -10,6 +10,13 @@
 #if defined(__linux__)
 #include <sys/mman.h>
 #elif defined(_WIN32)
+// windows.h's minwindef.h min/max macros break std::numeric_limits::max(),
+// std::min and std::max in every translation unit that sees them — suppress
+// the macros at the source. CMakeLists.txt also defines NOMINMAX project-wide
+// (this guard protects non-CMake consumers of the public headers).
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
 #include <windows.h>
 #endif
 
@@ -52,7 +59,11 @@ OrderBook::OrderBook(size_t max_order_id, size_t max_active_orders, Price min_pr
         std::fflush(stderr);
         std::abort();
     }
-    if (max_price == std::numeric_limits<Price>::max()) [[unlikely]] {
+    // Parenthesized (max)(): immune to a minwindef.h `max` macro that a
+    // consumer's TU may still have active (windows.h included before our
+    // headers, without NOMINMAX). Function-like macros cannot expand
+    // through the enclosing parentheses.
+    if (max_price == (std::numeric_limits<Price>::max)()) [[unlikely]] {
         std::fprintf(stderr,
                      "OrderBook: fatal - max_price saturates the Price type "
                      "(UINT32_MAX is reserved for the empty-ask sentinel)\n");
