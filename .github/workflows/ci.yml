@@ -226,6 +226,50 @@ jobs:
           cmake --build build --config Release --target hft_tests -j
           ctest --test-dir build -C Release -V --output-on-failure --timeout 300
 
+      - name: Deploy ASan + Debug-CRT DLLs next to the Debug test exe
+        # The Debug leg builds with /fsanitize=address (CMakeLists MSVC
+        # branch). Since VS 17.7 the MSVC ASan runtime is one DLL —
+        # clang_rt.asan_dynamic-x86_64.dll — living in the toolset's
+        # bin\Hostx64\x64, a directory ctest's environment does NOT have on
+        # PATH (actions/runner-images#8891): the exe dies in the loader with
+        # 0xc0000135 (STATUS_DLL_NOT_FOUND). The /MDd Debug CRT
+        # (vcruntime140d.dll, msvcp140d.dll, ...) is likewise only under
+        # VC\Redist\MSVC\<ver>\debug_nonredist. The Windows loader searches
+        # the exe's own folder FIRST, so copying beats PATH mutation for
+        # ctest-spawned processes.
+        shell: pwsh
+        run: |
+          $clLine = Select-String -Path build/CMakeCache.txt -Pattern '^CMAKE_CXX_COMPILER:FILEPATH=(.+)$'
+          if (-not $clLine) { throw 'CMAKE_CXX_COMPILER not found in build/CMakeCache.txt' }
+          $toolsetBin = Split-Path $clLine.Matches[0].Groups[1].Value.Trim()
+          Write-Host "toolchain bin: $toolsetBin"
+          $dst = 'build/Debug'
+          New-Item -ItemType Directory -Force -Path $dst | Out-Null
+
+          # 1) ASan runtime DLL(s) from the EXACT toolset that built the exe
+          #    (CMake recorded cl.exe's path at configure time — no
+          #    newest-version guessing).
+          Get-ChildItem -Path "$toolsetBin/clang_rt.asan*dynamic*.dll" -ErrorAction SilentlyContinue |
+            ForEach-Object { Copy-Item $_.FullName $dst -Force; Write-Host "copied $($_.Name)" }
+
+          # 2) Non-redistributable Debug CRT. Newest redist version dir wins
+          #    per DLL name (dirs are dotted versions; guard the cast).
+          Get-ChildItem -Path 'C:/Program Files/Microsoft Visual Studio/2022/*/VC/Redist/MSVC/*/debug_nonredist/x64/*/*.dll' -ErrorAction SilentlyContinue |
+            Sort-Object { try { [version]$_.Directory.Parent.Parent.Parent.Name } catch { [version]'0.0.0.0' } } |
+            Group-Object Name | ForEach-Object { $_.Group | Select-Object -Last 1 } |
+            ForEach-Object { Copy-Item $_.FullName $dst -Force; Write-Host "copied $($_.Name)" }
+
+          # 3) Debug UCRT (ucrtbased.dll) — normally already in System32 via
+          #    the Windows SDK; deploy alongside anyway so resolution is
+          #    deterministic (loader prefers the exe folder).
+          $ucrt = Get-ChildItem -Path 'C:/Program Files (x86)/Windows Kits/10/bin/*/x64/ucrt/ucrtbased.dll' -ErrorAction SilentlyContinue |
+            Sort-Object { try { [version]$_.Directory.Parent.Parent.Name } catch { [version]'0.0.0.0' } } |
+            Select-Object -Last 1
+          if ($ucrt) { Copy-Item $ucrt.FullName $dst -Force; Write-Host 'copied ucrtbased.dll' }
+
+          Write-Host '--- deployed DLLs ---'
+          Get-ChildItem $dst -Filter *.dll | ForEach-Object { Write-Host "  $($_.Name)" }
+
       - name: Build + test hft_tests (Debug, MSVC ASan per CMakeLists)
         run: |
           cmake --build build --config Debug --target hft_tests -j

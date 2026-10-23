@@ -400,7 +400,9 @@ HFT_ENGINE_INLINE void OrderBook::match_order_direct(
                 // total_quantity <= taker_quantity <= Quantity max (the
                 // uint64 accumulator only exceeds uint32 for levels no
                 // single taker can ever consume, which take the slow path).
-                Quantity level_qty = static_cast<Quantity>(level.total_quantity);
+                // `auto` (not `Quantity`): the static_cast already spells
+                // the type — repeating it trips modernize-use-auto.
+                auto level_qty = static_cast<Quantity>(level.total_quantity);
                 const uint32_t maker_count = level.order_count;
                 uint32_t maker_order_idx = level.head;
 
@@ -558,7 +560,9 @@ HFT_ENGINE_INLINE void OrderBook::match_order_direct(
                 // total_quantity <= taker_quantity <= Quantity max (the
                 // uint64 accumulator only exceeds uint32 for levels no
                 // single taker can ever consume, which take the slow path).
-                Quantity level_qty = static_cast<Quantity>(level.total_quantity);
+                // `auto` (not `Quantity`): the static_cast already spells
+                // the type — repeating it trips modernize-use-auto.
+                auto level_qty = static_cast<Quantity>(level.total_quantity);
                 const uint32_t maker_count = level.order_count;
                 uint32_t maker_order_idx = level.head;
 
