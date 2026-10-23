@@ -38,3 +38,7 @@ fuzz-corpus/
 
 # Full-pipeline verification output (scripts/run_all.sh)
 verify-results/
+
+# Local CI dry-run scratch (scripts/local_dryrun.sh — mirrors ci.yml checks
+# before pushing; never commit build trees or captured logs)
+.dryrun/

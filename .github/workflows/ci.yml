@@ -1,32 +1,73 @@
 # ============================================================================
 # CI — hft-matching-engine
 #
-# Open-source hardening invariants — preserve all of these when editing:
+# Layered verification pipeline. Design contract:
 #
-#   1. SUPPLY CHAIN  Every third-party action is pinned to a full 40-char
-#                    commit SHA, never a mutable tag. Bump by verifying the
-#                    new SHA yourself (e.g. `git ls-remote <url> <tag>`).
-#   2. LEAST PRIVILEGE  The workflow token is read-only by default
-#                    (`permissions: contents: read`). The only escalation is
-#                    CodeQL's `security-events: write`, scoped to that job.
-#   3. NO RUNAWAYS  Every job declares `timeout-minutes`; superseded runs are
-#                    cancelled automatically by the concurrency group.
-#   4. REPRODUCIBLE  Runners are pinned to `ubuntu-24.04` (never -latest) so
-#                    an image rollout cannot change toolchain versions under
-#                    a green build. FetchContent deps are SHA-pinned in
-#                    CMakeLists.txt.
-#   5. DEFENSE IN DEPTH  Lint (format+tidy), the 2x3 compiler/flavor matrix,
-#                    CodeQL scanning, the full run_all.sh verification
-#                    pipeline, and nightly differential fuzzing are separate
-#                    jobs — one broken leg can never hide another.
+#   MATCHING CORRECTNESS                      PERFORMANCE / MICROARCHITECTURE
+#        │                                          │
+#   ┌────┼─────────┐                     Google Benchmark + RDTSC harness
+#   GoogleTest  Invariants  Differential             │
+#        │            │            │        Controlled CPU (affinity,
+#        └────────────┼────────────┘        mlockall, NUMA, warm-up)
+#                     ↓                                │
+#              Fuzz / Random                   Linux perf (stat/record/
+#                     ↓                          annotate) + FlameGraph
+#               ASan + UBSan                            │
+#                     ↓                          Cachegrind + Callgrind
+#               HFT_AUDIT_MODE                          │
+#                     ↓                          Assembly inspection
+#                 Valgrind                                 │
+#                                              Optimization tuning
 #
-# Job graph:
-#   build-and-test         gcc-13/clang-18 x Release/Debug/Audit, -Werror
-#   lint                   clang-format + clang-tidy (warnings-as-errors)
-#   codeql                 GitHub code scanning (C/C++), uploads SARIF
-#   verification-pipeline  scripts/run_all.sh — 11 phases incl. Valgrind,
-#                          cppcheck, sanitizer flavors, gVisor self-heal sim
-#   nightly-fuzz           scheduled libFuzzer differential run w/ corpus cache
+# RUN-ONCE DEDUP CONTRACT ("overlapped ones should run once"):
+#   Every analysis tool runs in EXACTLY ONE job, never per matrix cell:
+#     sanitizers (ASan/UBSan/LSan)      -> job `sanitizers`       (once)
+#     HFT_AUDIT_MODE internal gear      -> job `audit-mode`       (once)
+#     Valgrind Memcheck                 -> job `valgrind`         (once)
+#     clang-format/tidy/analyzer,
+#     cppcheck                          -> job `static-analysis`  (once each)
+#     libFuzzer + AFL++ + seed sweeps   -> job `fuzz`             (once)
+#     perf/Cachegrind/Callgrind/
+#     FlameGraph                        -> job `performance`      (once)
+#     compiler/-O/LTO/PGO/-march A/B    -> job `performance-lab`  (once)
+#   The `correctness` matrix only varies compiler x build flavor
+#   (portability dimension), never re-runs an analysis tool.
+#
+# DEPENDENCY SHAPE (blast-radius rule):
+#   correctness gates every deep leg; fuzz / sanitizers / audit-mode /
+#   valgrind / performance / performance-lab run in PARALLEL behind it.
+#   The funnel's ordering guarantee lives in the correctness gate itself
+#   (no deep leg runs on red correctness) — a single flaky leg can no
+#   longer block its siblings. static-analysis / codeql / the MSVC probe
+#   run independently from the start.
+#
+# LOG VISIBILITY ("show the log while running"):
+#   - ctest always runs with -V --output-on-failure (per-test output
+#     streams live into the Actions log).
+#   - Every tool pipes through `tee` so its output is streamed live AND
+#     captured for the run's artifacts. Nothing is redirected to a file
+#     that the watcher cannot see.
+#
+# TOOLCHAIN / APT SAFETY (fix for the previous red builds):
+#   The old workflow ran
+#       apt-get install -y clang-18 libc++-18-dev libc++abi-18-dev libunwind-dev
+#   on ubuntu-24.04. The libc++-18 family (llvm-toolchain-18) pulls
+#   `libunwind-18-dev`, which Declares: Conflicts against the archive's
+#   `libunwind-dev` requested in the same transaction — apt cannot satisfy
+#   both and exits 100. Fix: this workflow installs NO LLVM toolchain from
+#   apt. gcc-13 and clang-18 are preinstalled on the ubuntu-24.04 image and
+#   are used as-is (with libstdc++); only archive packages that never
+#   conflict (valgrind, cppcheck, numactl, flamegraph, linux-tools,
+#   aflplusplus) are installed, after dropping the runner image's
+#   unsigned Microsoft apt source (whose InRelease breaks `apt-get update`).
+#   The libc++ leg is intentionally dropped: it is not part of the
+#   compiler-portability matrix (GCC + Clang + MSVC, all on libstdc++/STL).
+#
+# SUPPLY CHAIN / RUNAWAY SAFETY (unchanged invariants):
+#   - actions pinned to full 40-char commit SHAs
+#   - `permissions: contents: read` (+ `security-events: write` for CodeQL)
+#   - every job declares timeout-minutes; concurrency cancels superseded runs
+#   - runner pinned to ubuntu-24.04; FetchContent deps SHA-pinned in CMake
 # ============================================================================
 
 name: CI
@@ -36,18 +77,38 @@ on:
     branches: [ "main" ]
   pull_request:
     branches: [ "main" ]
-  workflow_dispatch: {} # allow manual runs from the Actions tab
+  workflow_dispatch:
+    # Manual runs are tunable from the Actions tab ("Run workflow" panel);
+    # push/PR/schedule runs use the hardcoded defaults noted per input.
+    inputs:
+      fuzz_seconds:
+        description: "libFuzzer budget in seconds (nightly default 900, push/PR 60)"
+        type: string
+        default: "900"
+      sweep_iterations:
+        description: "Differential seed-sweep iterations (nightly 10, push/PR 5)"
+        type: string
+        default: "10"
+      deep_perf:
+        description: "Run the non-blocking performance-lab job (compiler/-O/LTO/PGO/-march A/B)"
+        type: boolean
+        default: true
+      perf_refresh_baseline:
+        description: "Ignore the cached perf baseline and record a fresh one (saved on main only)"
+        type: boolean
+        default: false
+      codeql_queries:
+        description: "CodeQL query suite (default queries are shallow for C++)"
+        type: choice
+        options: [ security-extended, security-and-quality ]
+        default: security-extended
   schedule:
-    # Nightly (02:30 UTC) deep-fuzz leg; only fires on the default branch.
+    # Nightly (02:30 UTC) deep-fuzz + performance trending; default branch only.
     - cron: "30 2 * * *"
 
-# Least-privilege token: read the repo, nothing else. Jobs that need more
-# re-declare their own scope (see the codeql job).
 permissions:
   contents: read
 
-# Cancel superseded runs on the same ref — saves runner minutes and prevents
-# two pipelines from racing to upload the same artifact name.
 concurrency:
   group: ci-${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
@@ -56,119 +117,493 @@ defaults:
   run:
     shell: bash
 
+env:
+  # Quick benchmark filter shared by every comparison leg in `performance`.
+  PERF_BENCH_FILTER: "BM_Matching_DeepBook|BM_SweepMultipleLevels|BM_Churn"
+  PERF_MIN_TIME: "0.05s"
+
 jobs:
   # ══════════════════════════════════════════════════════════════════════
-  # Build matrix: { gcc, clang } x { Release, Debug, Audit }
-  #   Release = -O3, zero instrumentation (the artifact you ship)
-  #   Debug   = -O0 + ASan + UBSan + full HFT_DEBUG_TOOLS instrumentation
-  #   Audit   = -O2 + instrumentation (memory-safety gear on optimized code)
+  # LAYER 1 — functional correctness matrix.
+  #   Compiler portability: gcc-13 / clang-18 (Linux) + MSVC probe (Windows).
+  #   Build flavors: Debug (-O0+g) / Release (-O3) / RelWithDebInfo (-O3+g,
+  #   frame pointers — the profiling shape) + ONE include cell for
+  #   clang x Audit (gcc x Audit is built-and-tested by the run-once
+  #   `audit-mode` job, so a full Audit column would duplicate it).
+  #   Sanitizers are OFF here: the
+  #   Debug flavor's ASan/UBSan belongs to the `sanitizers` job (run once),
+  #   so the matrix cells stay pure portability/correctness legs.
+  #   One ctest run covers all three correctness legs: functional GoogleTest
+  #   suites, order-book invariants, and the differential suite against the
+  #   StdOrderBook reference oracle (all one test binary, so no overlap).
   # ══════════════════════════════════════════════════════════════════════
-  build-and-test:
-    name: "build & test: ${{ matrix.compiler }} / ${{ matrix.build_type }}"
+  correctness:
+    name: "correctness: ${{ matrix.compiler }} / ${{ matrix.build_type }}"
     runs-on: ubuntu-24.04
-    timeout-minutes: 45
+    timeout-minutes: 30
     strategy:
       fail-fast: false
       matrix:
         compiler: [ gcc, clang ]
-        build_type: [ Release, Debug, Audit ]
+        build_type: [ Debug, Release, RelWithDebInfo ]
+        # Single include (not a full cross product): closes the Audit-
+        # under-clang portability gap at minimal cost — the Audit flavor
+        # must compile warning-free under clang too. gcc x Audit stays in
+        # the run-once `audit-mode` job.
+        include:
+          - compiler: clang
+            build_type: Audit
 
     steps:
       - name: Check out sources
         # actions/checkout v4.2.2
         uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
 
-      - name: Install toolchain
+      - name: Show toolchain (preinstalled; no apt needed)
         run: |
-          # The runner image ships a Microsoft apt source whose InRelease for
-          # the current Ubuntu release can be unsigned; apt-get update then
-          # exits 100 and takes the job down. We install nothing from it, so
-          # drop it before updating. (Same note in lint / pipeline / fuzz.)
-          sudo rm -f /etc/apt/sources.list.d/microsoft-*.list \
-                     /etc/apt/sources.list.d/microsoft-*.sources
-          sudo apt-get update
-          if [ "${{ matrix.compiler }}" = "gcc" ]; then
-            sudo apt-get install -y g++-13
-          else
-            sudo apt-get install -y clang-18 libc++-18-dev libc++abi-18-dev libunwind-dev
-          fi
+          # gcc-13 and clang-18 ship with the ubuntu-24.04 image. Never
+          # apt-install the LLVM family here (libunwind-18-dev conflict).
+          g++-13 --version | head -1
+          clang++-18 --version | head -1
+          cmake --version | head -1
 
-      - name: Configure CMake (warnings are errors)
+      - name: Configure CMake (warnings are errors, sanitizers off)
         run: >
           cmake -B build
           -DCMAKE_BUILD_TYPE=${{ matrix.build_type }}
           -DCMAKE_CXX_COMPILER=${{ matrix.compiler == 'gcc' && 'g++-13' || 'clang++-18' }}
           -DHFT_WERROR=ON
-          ${{ matrix.compiler == 'clang' && '-DCMAKE_CXX_FLAGS=-stdlib=libc++' || '' }}
+          -DENABLE_ASAN=OFF
+          -DENABLE_UBSAN=OFF
 
-      - name: Build
+      - name: Build all targets
         run: cmake --build build -j"$(nproc)"
 
-      - name: Test (ctest)
+      # -V --output-on-failure: GTest per-case output streams live.
+      - name: Test (ctest, streamed live)
         working-directory: build
-        run: ctest --output-on-failure --timeout 300
+        run: ctest -V --output-on-failure --timeout 300
 
-      # The engine is exception-free (fault handlers, never throw), so the
-      # libc++ exception-string path that originally tripped ASan's
-      # alloc_dealloc_mismatch check is no longer reached. This leg re-runs
-      # the binary with a clean environment to prove no suppression is set
-      # anywhere in the workflow.
-      - name: Test (plain binary, no suppression env)
-        if: matrix.compiler == 'gcc' && matrix.build_type == 'Debug'
-        working-directory: build
-        run: ./hft_tests
-
-      # Engine smoke — a crash in main.cpp (e.g. an mlockall/bad_alloc
-      # failure) must never ship green.
-      - name: Smoke run — hft_engine
-        if: matrix.build_type != 'Debug'
+      # Flavor smoke: every built flavor must produce a working binary.
+      # (mlock-path smoke matrix runs once in the valgrind job.)
+      - name: Smoke — engine (mlockall disabled for CI)
         working-directory: build
         run: HFT_DISABLE_MLOCKALL=1 timeout 120 ./hft_engine
 
-      - name: Smoke run — real-world simulation (200k events)
-        if: matrix.build_type == 'Release'
+      - name: Smoke — real-world simulation (200k events)
         working-directory: build
         run: timeout 180 ./hft_sim 200000
 
-      - name: Smoke run — RDTSC latency harness
-        if: matrix.build_type == 'Release'
-        working-directory: build
-        run: timeout 120 ./hft_rdtsc_bench
-
-      - name: Benchmarks (quick)
-        if: matrix.build_type == 'Release'
-        working-directory: build
-        run: timeout 600 ./hft_bench --benchmark_min_time=0.1s
-
   # ══════════════════════════════════════════════════════════════════════
-  # Lint: the repo ships .clang-tidy / .clang-format — enforce both.
+  # MSVC portability probe (windows-latest).
+  # The core is _WIN32-guarded (MemoryPool.h, OrderBook.cpp, Macros.h) and
+  # CMakeLists ships an explicit MSVC branch — but the leg has never been
+  # compiled by CI, so it lands as a clearly-labelled non-blocking probe.
+  # Flip `continue-on-error` to false once it has been green for a stretch.
   # ══════════════════════════════════════════════════════════════════════
-  lint:
-    name: lint (clang-format + clang-tidy)
-    runs-on: ubuntu-24.04
-    timeout-minutes: 20
+  correctness-msvc:
+    name: "correctness: msvc (portability probe, non-blocking)"
+    runs-on: windows-2022
+    timeout-minutes: 30
+    continue-on-error: true
     steps:
       - name: Check out sources
         # actions/checkout v4.2.2
         uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
 
-      - name: Install tooling
-        run: |
-          sudo rm -f /etc/apt/sources.list.d/microsoft-*.list \
-                     /etc/apt/sources.list.d/microsoft-*.sources
-          sudo apt-get update
-          sudo apt-get install -y clang-18 clang-tidy-18 clang-format-18
+      - name: Configure (default VS generator)
+        run: cmake -B build -DCMAKE_BUILD_TYPE=Release
 
-      - name: clang-format check
+      - name: Build + test hft_tests (Release)
+        run: |
+          cmake --build build --config Release --target hft_tests -j
+          ctest --test-dir build -C Release -V --output-on-failure --timeout 300
+
+      - name: Build + test hft_tests (Debug, MSVC ASan per CMakeLists)
+        run: |
+          cmake --build build --config Debug --target hft_tests -j
+          ctest --test-dir build -C Debug -V --output-on-failure --timeout 300
+
+  # ══════════════════════════════════════════════════════════════════════
+  # LAYER 2 — fuzz / randomized (needs: correctness).
+  #   1. Differential seed sweeps — rotating-seed runs of the
+  #      DifferentialFuzz.* suite vs the StdOrderBook oracle (property /
+  #      randomized testing: rare matching-state bugs).
+  #   2. libFuzzer differential core (malformed orders + operation
+  #      sequences), ASan+UBSan-instrumented, budget scaled by event.
+  #   3. AFL++ smoke leg (best-effort; skipped with a warning if the
+  #      package/driver is unavailable on the image).
+  # ══════════════════════════════════════════════════════════════════════
+  fuzz:
+    name: fuzz + randomized differential
+    needs: correctness
+    runs-on: ubuntu-24.04
+    timeout-minutes: 40
+    env:
+      # Manual dispatch inputs win; nightly uses the long defaults;
+      # push/PR uses the short ones.
+      FUZZ_SECONDS: ${{ inputs.fuzz_seconds || (github.event_name == 'schedule' && '900') || '60' }}
+      SWEEP_ITERATIONS: ${{ inputs.sweep_iterations || (github.event_name == 'schedule' && '10') || '5' }}
+    steps:
+      - name: Check out sources
+        # actions/checkout v4.2.2
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+
+      - name: Tools (unversioned clang names for the repo scripts)
+        run: |
+          # clang-18 is preinstalled. fuzz.sh invokes plain `clang++`; add
+          # unversioned symlinks only if the image lacks them.
+          command -v clang++  >/dev/null || sudo ln -sf /usr/bin/clang++-18  /usr/local/bin/clang++
+          clang++ --version | head -1
+
+      - name: Restore fuzz corpus
+        # actions/cache v4.2.3 — coverage compounds across runs
+        uses: actions/cache@5a3ec84eff668545956fd18022155c47e93e2684
+        with:
+          path: fuzz-corpus
+          key: fuzz-corpus-${{ github.run_id }}
+          restore-keys: |
+            fuzz-corpus-
+
+      # Rotating-seed differential sweeps (randomized property layer).
+      - name: Differential seed sweeps (${{ env.SWEEP_ITERATIONS }} iterations)
+        run: scripts/fuzz.sh seeds "${SWEEP_ITERATIONS}" 2>&1 | tee sweep.log
+
+      # libFuzzer differential core; artifacts land in fuzz-artifacts/.
+      - name: libFuzzer differential core (${{ env.FUZZ_SECONDS }}s)
+        run: |
+          mkdir -p fuzz-artifacts
+          set -o pipefail
+          scripts/fuzz.sh libfuzzer "${FUZZ_SECONDS}" 2>&1 | tee fuzz-artifacts/libfuzzer.log
+
+      # Best-effort AFL++ leg. Driver discovery is package-driven
+      # (dpkg -L), NOT path-hardcoded: afl++ renamed the driver across
+      # versions (afl_driver.c -> aflpp_driver.c) and newer packages also
+      # ship a prebuilt libAFLDriver.a — accept whichever the image has.
+      - name: Install AFL++ (best-effort, shared apt composite)
+        continue-on-error: true
+        uses: ./.github/actions/setup-apt
+        with:
+          packages: aflplusplus
+
+      - name: AFL++ campaign (best-effort)
+        continue-on-error: true
+        run: |
+          set -x
+          command -v afl-clang-fast >/dev/null \
+            || { echo "::warning::afl-clang-fast not installed — AFL++ leg skipped"; exit 0; }
+          # Locate the libFuzzer-compatible driver: prefer the prebuilt
+          # static lib, then any driver source the package ships.
+          PREBUILT="$(dpkg -L aflplusplus 2>/dev/null | grep -E 'libAFLDriver\.a$' | head -1 || true)"
+          DRIVER=""
+          for cand in \
+            /usr/lib/afl/aflpp_driver.c \
+            /usr/lib/afl/afl_driver.c \
+            /usr/lib/afl/afl_driver.cpp \
+            "$(dpkg -L aflplusplus 2>/dev/null | grep -E 'aflpp_driver\.c$|afl_driver\.c(pp)?$' | head -1)"; do
+            [ -n "$cand" ] && [ -f "$cand" ] && DRIVER="$cand" && break
+          done
+          if [ -n "$PREBUILT" ] && [ -f "$PREBUILT" ]; then
+            DRIVER_ARGS="$PREBUILT"
+          elif [ -n "$DRIVER" ]; then
+            DRIVER_ARGS="$DRIVER"
+          else
+            echo "::warning::no AFL driver (libAFLDriver.a / aflpp_driver.c) in this afl++ package — leg skipped"
+            exit 0
+          fi
+          mkdir -p fuzz-corpus-afl && cp fuzz-corpus/* fuzz-corpus-afl/ 2>/dev/null || true
+          afl-clang-fast++ -std=c++20 -O2 -g -I tests -I src \
+            tools/fuzz_driver.cpp src/OrderBook.cpp $DRIVER_ARGS \
+            -o fuzz-artifacts/hft_afl 2>&1 | tee fuzz-artifacts/afl-build.log
+          AFL_SKIP_CPUFREQ=1 AFL_I_DONT_CARE_ABOUT_MISSING_CRASHES=1 \
+            timeout 90 afl-fuzz -i fuzz-corpus-afl -o fuzz-out -V 60 \
+            -- fuzz-artifacts/hft_afl @@ 2>&1 | tee fuzz-artifacts/afl-run.log
+          echo "[OK] AFL++ smoke campaign finished (fuzz-out/fuzzer1 kept as artifact)"
+
+      - name: Upload fuzz artifacts
+        if: always()
+        # actions/upload-artifact v4.6.2
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: fuzz-artifacts
+          path: |
+            fuzz-artifacts/
+            fuzz-out/
+            fuzz-corpus/
+          retention-days: 30
+          if-no-files-found: warn
+
+  # ══════════════════════════════════════════════════════════════════════
+  # LAYER 3 — sanitizers (parallel leg behind the correctness gate).
+  #   Runs ONCE, single compiler.
+  #   Build A: Debug + ASan + UBSan (CMake defaults). On Linux the ASan
+  #   runtime performs leak checking at exit — LSan is included here, so
+  #   ASan+UBSan+LSan is one pass, not three.
+  #   Build B: standalone LSan (-fsanitize=leak, no ASan) — a second pass
+  #   with a different runtime, catching leaks without ASan interference.
+  #   (A separate UBSan-only build would repeat Build A's UB checks —
+  #   skipped by the run-once contract; run_sanitizers.sh has it locally.)
+  # ══════════════════════════════════════════════════════════════════════
+  sanitizers:
+    name: sanitizers (ASan + UBSan + LSan)
+    needs: correctness
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    env:
+      ASAN_OPTIONS: "detect_leaks=1:strict_string_checks=1:detect_stack_use_after_return=1:halt_on_error=1"
+      UBSAN_OPTIONS: "print_stack_trace=1:halt_on_error=1"
+      LSAN_OPTIONS: "exitcode=23"
+    steps:
+      - name: Check out sources
+        # actions/checkout v4.2.2
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+
+      - name: Build A — Debug + ASan + UBSan (leak check at exit)
+        run: |
+          cmake -B build-asan-ubsan -DCMAKE_BUILD_TYPE=Debug \
+            -DCMAKE_CXX_COMPILER=clang++-18 -DHFT_WERROR=ON
+          cmake --build build-asan-ubsan -j"$(nproc)"
+
+      - name: Test A (ctest, streamed live)
+        working-directory: build-asan-ubsan
+        run: ctest -V --output-on-failure --timeout 600
+
+      - name: Build B — standalone LSan
+        run: |
+          cmake -B build-lsan -DCMAKE_BUILD_TYPE=Debug \
+            -DCMAKE_CXX_COMPILER=clang++-18 -DHFT_WERROR=ON \
+            -DENABLE_ASAN=OFF -DENABLE_UBSAN=OFF \
+            -DCMAKE_CXX_FLAGS="-fsanitize=leak -fno-omit-frame-pointer" \
+            -DCMAKE_EXE_LINKER_FLAGS="-fsanitize=leak"
+          cmake --build build-lsan -j"$(nproc)"
+
+      - name: Test B (ctest, streamed live)
+        working-directory: build-lsan
+        run: ctest -V --output-on-failure --timeout 600
+
+  # ══════════════════════════════════════════════════════════════════════
+  # LAYER 4 — HFT_AUDIT_MODE (parallel leg behind the correctness gate).
+  #   Runs ONCE (gcc): the clang x Audit portability cell lives in the
+  #   `correctness` matrix include, so this job is only the deep run.
+  #   -O2 + HFT_AUDIT_MODE + full internal instrumentation (canaries, slot
+  #   stamps, allocation tracking, journal, latches, validate_book).
+  #   This leg proves the engine's OWN validation gear — MemoryPool bounds,
+  #   double-free detection, internal consistency checks — catches problems
+  #   on optimized code WITHOUT any external tool: the built-in audit must
+  #   stand on its own, not lean on sanitizers.
+  # ══════════════════════════════════════════════════════════════════════
+  audit-mode:
+    name: audit mode (HFT_AUDIT_MODE internal validation)
+    needs: correctness
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    steps:
+      - name: Check out sources
+        # actions/checkout v4.2.2
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+
+      - name: Configure + build (Audit flavor, gcc)
+        run: |
+          cmake -B build-audit -DCMAKE_BUILD_TYPE=Audit \
+            -DCMAKE_CXX_COMPILER=g++-13 -DHFT_WERROR=ON
+          cmake --build build-audit -j"$(nproc)"
+
+      - name: Test (ctest, streamed live)
+        working-directory: build-audit
+        run: ctest -V --output-on-failure --timeout 600
+
+      - name: Smoke — engine under audit instrumentation
+        working-directory: build-audit
+        run: HFT_DISABLE_MLOCKALL=1 timeout 120 ./hft_engine 2>&1 | tee engine-audit.log
+
+  # ══════════════════════════════════════════════════════════════════════
+  # LAYER 5 — Valgrind Memcheck (parallel leg behind the correctness
+  #   gate). Runs ONCE.
+  #   Independent memory-safety validation (no compiler runtime involved):
+  #   Memcheck over the full test suite and the engine, plus the 4-path
+  #   engine smoke matrix (nolock / madvise-only / gVisor-sim / default)
+  #   and the 200k real-world simulation. RelWithDebInfo build: identical
+  #   code shape to Release, with symbols + frame pointers for Memcheck.
+  # ══════════════════════════════════════════════════════════════════════
+  valgrind:
+    name: valgrind memcheck + engine smoke matrix
+    needs: correctness
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - name: Check out sources
+        # actions/checkout v4.2.2
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+
+      - name: Install valgrind (shared apt composite)
+        # .github/actions/setup-apt — drops the unsigned Microsoft apt
+        # source (its InRelease can make apt-get update exit 100), updates,
+        # installs the listed packages. One definition, every job.
+        uses: ./.github/actions/setup-apt
+        with:
+          packages: valgrind
+
+      - name: Show valgrind version
+        run: valgrind --version
+
+      - name: Configure + build (RelWithDebInfo, gcc)
+        run: |
+          cmake -B build-reldeb -DCMAKE_BUILD_TYPE=RelWithDebInfo \
+            -DCMAKE_CXX_COMPILER=g++-13 -DHFT_WERROR=ON
+          cmake --build build-reldeb --target hft_tests hft_engine hft_sim -j"$(nproc)"
+
+      - name: Memcheck — full test suite
+        run: |
+          mkdir -p verify-out
+          set -o pipefail
+          valgrind --quiet --leak-check=full --show-leak-kinds=all \
+            --track-origins=yes --error-exitcode=99 \
+            ./build-reldeb/hft_tests --gtest_brief=1 2>&1 | tee verify-out/valgrind-tests.log
+
+      - name: Memcheck — engine (mlockall disabled)
+        run: |
+          set -o pipefail
+          HFT_DISABLE_MLOCKALL=1 valgrind --quiet --leak-check=full \
+            --show-leak-kinds=all --track-origins=yes --error-exitcode=99 \
+            ./build-reldeb/hft_engine 2>&1 | tee verify-out/valgrind-engine.log
+
+      # 4-path engine smoke + gVisor self-heal + real-world sim — once.
+      - name: Engine smoke matrix (mlock paths, gVisor sim, 200k sim)
+        run: |
+          set -u -o pipefail
+          run_smoke() { # <name> <expected-grep> <command...>
+            local name="$1" expect="$2"; shift 2
+            if "$@" 2>&1 | tee "verify-out/smoke-$name.log" && \
+               grep -q "$expect" "verify-out/smoke-$name.log"; then
+              echo "[OK] $name"
+            else
+              echo "[X] $name — see verify-out/smoke-$name.log"
+              return 1
+            fi
+          }
+          run_smoke engine-nolock     "mlockall skipped" \
+            env HFT_DISABLE_MLOCKALL=1 ./build-reldeb/hft_engine
+          run_smoke engine-madviseonly "madvise-only mode" \
+            env HFT_MADVISE_ONLY=1 ./build-reldeb/hft_engine
+          # gVisor-style runtime: mlockall lies about success; the engine
+          # must probe one page and self-heal to pageable.
+          cc -shared -fPIC -O2 -Wall -Wextra -o verify-out/mlock_gvisor_sim.so \
+            tools/mlock_gvisor_sim.c -ldl
+          # Unlimited memlock for this shell FIRST so every mlock path below
+          # runs under real conditions (children inherit); degrade quietly —
+          # passwordless sudo exists on hosted runners, restricted
+          # self-hosted runners may lack it, and the engine handles that.
+          sudo prlimit --memlock=unlimited:unlimited --pid $$ 2>/dev/null \
+            || echo "::warning::prlimit unavailable on this host — engine runs unlocked (informational)"
+          run_smoke engine-gvisorsim  "reverting to pageable" \
+            env LD_PRELOAD="$PWD/verify-out/mlock_gvisor_sim.so" ./build-reldeb/hft_engine \
+            || { grep -q "mlockall unavailable on this host" verify-out/smoke-engine-gvisorsim.log \
+                 && echo "::warning::gVisor sim not reachable on this runner (mlockall path unavailable) — informational only" \
+                 || { echo "[X] engine-gvisorsim — see verify-out/smoke-engine-gvisorsim.log"; exit 1; }; }
+          run_smoke engine-default    "Engine run complete" \
+            ./build-reldeb/hft_engine
+          run_smoke sim-200k          "TIME DIFFERENCE" \
+            ./build-reldeb/hft_sim 200000
+
+      - name: Upload verify bundle
+        if: always()
+        # actions/upload-artifact v4.6.2
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: verify-results
+          path: verify-out/
+          retention-days: 14
+          if-no-files-found: warn
+
+  # ══════════════════════════════════════════════════════════════════════
+  # STATIC ANALYSIS — one job, four tools, each exactly once:
+  #   clang-format (style gate) / clang-tidy (bug+perf+modern-C++, strict
+  #   gate via .clang-tidy WarningsAsErrors '*') / Clang Static Analyzer
+  #   (path-based; scan-build-18, with a clang --analyze fallback) /
+  #   cppcheck (additional sweep, findings fail the job).
+  # ══════════════════════════════════════════════════════════════════════
+  static-analysis:
+    name: static analysis (format, tidy, analyzer, cppcheck)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    steps:
+      - name: Check out sources
+        # actions/checkout v4.2.2
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+
+      - name: Install tools (shared apt composite)
+        # if-missing pairs are "command:package" — installed only when the
+        # command is absent; an install failure degrades to a warning
+        # (clang-analyzer-18 genuinely may be absent on noble, and the
+        # analyzer step below has a clang --analyze fallback).
+        # Never install the libc++ family (libunwind-18-dev conflict).
+        uses: ./.github/actions/setup-apt
+        with:
+          packages: cppcheck
+          if-missing: >-
+            clang-tidy-18:clang-tidy-18
+            clang-format-18:clang-format-18
+            scan-build-18:clang-analyzer-18
+
+      - name: Show tool versions
+        run: |
+          clang-tidy-18 --version | head -1
+          cppcheck --version
+
+      - name: clang-format (gate)
         run: |
           find src tests tools \( -name '*.cpp' -o -name '*.h' \) -print0 \
             | xargs -0 clang-format-18 --dry-run --Werror
 
-      - name: clang-tidy (src/ only; third-party excluded)
+      - name: clang-tidy (strict gate; .clang-tidy drives errors-as-errors)
         run: |
-          cmake -B build-tidy -DCMAKE_BUILD_TYPE=Debug -DCMAKE_CXX_COMPILER=clang++-18
-          cmake --build build-tidy --target hft_engine -- -j"$(nproc)"
-          clang-tidy-18 -p build-tidy src/*.cpp --warnings-as-errors='*'
+          # configure only — CMAKE_EXPORT_COMPILE_COMMANDS is ON; the
+          # compile database is what -p build-tidy consumes.
+          cmake -B build-tidy -DCMAKE_BUILD_TYPE=Debug \
+            -DCMAKE_CXX_COMPILER=clang++-18
+          clang-tidy-18 -p build-tidy src/*.cpp 2>&1 | tee tidy.log
+          ! grep -qE 'error:|warning:' tidy.log || { echo "[X] clang-tidy findings above"; exit 1; }
+
+      - name: Clang Static Analyzer (path-based)
+        run: |
+          mkdir -p static-out
+          if command -v scan-build-18 >/dev/null; then
+            cmake -B build-scan -DCMAKE_BUILD_TYPE=Release \
+              -DCMAKE_CXX_COMPILER=clang++-18
+            # Exclude FetchContent deps (third-party) from the analysis.
+            scan-build-18 --status-bugs --exclude build-scan/_deps \
+              -o static-out cmake --build build-scan --target hft_tests -j"$(nproc)" \
+              2>&1 | tee static-out/scan-build.log
+          else
+            echo "[fallback] scan-build unavailable — clang --analyze per TU"
+            rc=0
+            for f in src/*.cpp; do
+              clang++-18 --analyze -std=c++20 -DNDEBUG -Isrc "$f" \
+                2>&1 | tee "static-out/analyze-$(basename "$f").log"
+              grep -qE 'warning:|error:' "static-out/analyze-$(basename "$f").log" && rc=1
+            done
+            [ $rc -eq 0 ] || { echo "[X] static analyzer findings above"; exit 1; }
+          fi
+
+      - name: cppcheck (findings fail)
+        run: |
+          # --language=c++ is required: without it cppcheck 2.13 guesses C
+          # for plain headers (Macros.h/Order.h) and aborts with syntaxError.
+          cppcheck --enable=warning,portability,performance --std=c++20 \
+            --language=c++ --inline-suppr --error-exitcode=1 \
+            -I src src/*.cpp src/*.h 2>&1 | tee static-out/cppcheck.log
+
+      - name: Upload static reports
+        if: always()
+        # actions/upload-artifact v4.6.2
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: static-analysis-reports
+          path: |
+            static-out/
+            tidy.log
+          retention-days: 14
+          if-no-files-found: warn
 
   # ══════════════════════════════════════════════════════════════════════
   # CodeQL — free static security scanning for public repos (C/C++).
@@ -192,6 +627,10 @@ jobs:
         uses: github/codeql-action/init@ff0a06e83cb2de871e5a09832bc6a81e7276941f
         with:
           languages: cpp
+          # The default suite is shallow for C++; security-extended adds
+          # integer-overflow / TOCTOU / memory-safety depth an HFT core
+          # needs. Tunable per manual run (workflow_dispatch input).
+          queries: ${{ inputs.codeql_queries || 'security-extended' }}
 
       # Deterministic extraction build (no autobuild guessing): hft_engine
       # compiles src/main.cpp + src/OrderBook.cpp — full first-party coverage.
@@ -207,57 +646,28 @@ jobs:
           category: "/language:cpp"
 
   # ══════════════════════════════════════════════════════════════════════
-  # Full verification pipeline — the same end-to-end script the owner runs
-  # locally (scripts/run_all.sh): 11 phases — env, 5-flavor build, tests,
-  # fuzz, Valgrind, static analysis, benchmarks, RDTSC, simulation, smoke
-  # matrix (incl. the gVisor self-heal simulation), summary. The bundle is
-  # uploaded on every run, success or failure.
+  # PERFORMANCE (GATING) — the core measurement pipeline, one tool each:
+  #   Google Benchmark + custom RDTSC latency harness
+  #     -> controlled CPU (affinity via taskset, mlockall probe, NUMA,
+  #        warm-up, cold/hot cache)
+  #     -> Linux perf (stat/record/annotate) + FlameGraph
+  #     -> Cachegrind + Callgrind (VM-safe: simulation, no PMU needed)
+  #     -> assembly inspection + vectorization report
+  #     -> allocation-path proof (no malloc on the hot path)
+  #     -> benchmark regression vs cached baseline (95% CI)
+  # The comparative tuning legs (compiler / -O / LTO / PGO / -march=native)
+  # moved to the NON-BLOCKING `performance-lab` job — this job stays lean
+  # enough to sit comfortably inside its timeout on a 2-core runner.
+  # Hosted-runner honesty: Azure VMs expose no PMU, so hardware-counter
+  # events can print `<not supported>` — those steps are best-effort and
+  # every "N/A (virtualized CPU)" is annotated in the report; Cachegrind /
+  # Callgrind / software perf counters provide the VM-safe equivalents.
+  # For gating-grade ABSOLUTE numbers, pin this workflow to a self-hosted
+  # runner (isolcpus, nohz_full) — hosted numbers are comparative only.
   # ══════════════════════════════════════════════════════════════════════
-  verification-pipeline:
-    name: full verification pipeline (run_all.sh)
-    runs-on: ubuntu-24.04
-    timeout-minutes: 60
-    steps:
-      - name: Check out sources
-        # actions/checkout v4.2.2
-        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
-
-      - name: Install pipeline tools
-        run: |
-          sudo rm -f /etc/apt/sources.list.d/microsoft-*.list \
-                     /etc/apt/sources.list.d/microsoft-*.sources
-          sudo apt-get update
-          sudo apt-get install -y valgrind cppcheck clang-18 clang-tidy-18 clang-format-18
-          # run_all.sh looks up plain names; Debian suffixes -18
-          sudo ln -sf /usr/bin/clang++-18 /usr/local/bin/clang++
-          sudo ln -sf /usr/bin/clang-tidy-18 /usr/local/bin/clang-tidy
-          sudo ln -sf /usr/bin/clang-format-18 /usr/local/bin/clang-format
-
-      - name: Run pipeline (quick mode)
-        run: |
-          chmod +x scripts/*.sh
-          FAST=1 ./scripts/run_all.sh
-
-      - name: Upload verify-results bundle
-        if: always()
-        # actions/upload-artifact v4.6.2
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
-        with:
-          name: verify-results
-          path: verify-results/
-          retention-days: 14
-          if-no-files-found: warn
-
-  # ══════════════════════════════════════════════════════════════════════
-  # Nightly differential fuzzing — libFuzzer drives the engine against the
-  # StdOrderBook oracle (tools/fuzz_driver.cpp); any divergence between
-  # result code, filled quantity, trade stream or resting count is a crash.
-  # Runs on schedule and on demand; the corpus is cached between runs so
-  # coverage compounds.
-  # ══════════════════════════════════════════════════════════════════════
-  nightly-fuzz:
-    name: differential fuzz (libFuzzer, 20 min)
-    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+  performance:
+    name: performance + microarchitecture
+    needs: correctness
     runs-on: ubuntu-24.04
     timeout-minutes: 40
     steps:
@@ -265,37 +675,548 @@ jobs:
         # actions/checkout v4.2.2
         uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
 
-      - name: Install toolchain
-        run: |
-          sudo rm -f /etc/apt/sources.list.d/microsoft-*.list \
-                     /etc/apt/sources.list.d/microsoft-*.sources
-          sudo apt-get update
-          sudo apt-get install -y clang-18
-          # fuzz.sh invokes the unversioned name
-          sudo ln -sf /usr/bin/clang++-18 /usr/local/bin/clang++
-
-      - name: Restore fuzz corpus
-        # actions/cache v4.2.3 — carry libFuzzer coverage between nightly runs
+      - name: Restore performance baseline
+        # actions/cache v4.2.3 — baseline from the default branch, used by
+        # the regression step at the end of this job. Skipped when a manual
+        # run asks for a fresh baseline (perf_refresh_baseline input) —
+        # the run then records a new one (saved on main only, below).
+        if: inputs.perf_refresh_baseline != true
         uses: actions/cache@5a3ec84eff668545956fd18022155c47e93e2684
         with:
-          path: fuzz-corpus
-          key: fuzz-corpus-${{ github.run_id }}
+          path: .perf-baseline
+          key: perf-baseline-${{ github.run_id }}
           restore-keys: |
-            fuzz-corpus-
+            perf-baseline-
 
-      - name: Run differential fuzzer (20 minutes)
-        run: scripts/fuzz.sh libfuzzer 1200
+      - name: Install performance tools (shared apt composite)
+        # .github/actions/setup-apt — drops the unsigned Microsoft apt
+        # source, updates, installs the listed packages.
+        uses: ./.github/actions/setup-apt
+        with:
+          packages: numactl flamegraph valgrind
 
-      - name: Upload crash artifacts
-        if: failure()
+      - name: Locate perf + probe counter availability
+        run: |
+          # perf: prefer the kernel-matched tools, fall back to generic.
+          sudo apt-get install -y -qq "linux-tools-$(uname -r)" \
+            || sudo apt-get install -y -qq linux-tools-generic || true
+          PERFBIN="$(command -v perf || true)"
+          [ -n "$PERFBIN" ] || PERFBIN="$(ls /usr/lib/linux-tools/*/perf 2>/dev/null | sort -V | tail -1 || true)"
+          if [ -n "$PERFBIN" ]; then
+            echo "PERFBIN=$PERFBIN" >> "$GITHUB_ENV"
+            # live probe so the log shows whether counters work in this VM
+            "$PERFBIN" stat -e task-clock,page-faults true 2>&1 | head -8 | tee perf-tool-probe.log
+          else
+            echo "::warning::perf unavailable — perf stat/record legs degrade; Cachegrind/Callgrind still cover cache/branch/function analysis"
+          fi
+          numactl --hardware | tee perf-numa-topology.txt || true
+          mkdir -p perf-out
+
+      # ── Build shapes ──────────────────────────────────────────────────
+      - name: Build — Release (gcc) + RelWithDebInfo (gcc, profiling shape)
+        run: |
+          cmake -B build-rel -DCMAKE_BUILD_TYPE=Release -DCMAKE_CXX_COMPILER=g++-13
+          cmake --build build-rel -j"$(nproc)"
+          cmake -B build-reldeb -DCMAKE_BUILD_TYPE=RelWithDebInfo -DCMAKE_CXX_COMPILER=g++-13 \
+            -DFETCHCONTENT_SOURCE_DIR_GOOGLETEST="$PWD/build-rel/_deps/googletest-src" \
+            -DFETCHCONTENT_SOURCE_DIR_GOOGLEBENCHMARK="$PWD/build-rel/_deps/googlebenchmark-src"
+          cmake --build build-reldeb --target hft_bench hft_rdtsc_bench hft_engine -j"$(nproc)"
+
+      # ── Google Benchmark: throughput/ns-op, 5 reps, aggregates ────────
+      - name: Warm-up + Google Benchmark suite (5 repetitions)
+        run: |
+          TS=(taskset -c 2); [ "$(nproc)" -lt 3 ] && TS=(taskset -c 0)
+          # Warm-up pass (populates icache/dcache; discarded) — per spec.
+          "${TS[@]}" ./build-rel/hft_bench --benchmark_filter='BM_Churn' \
+            --benchmark_min_time=0.02s >/dev/null 2>&1 || true
+          set -o pipefail
+          "${TS[@]}" ./build-rel/hft_bench \
+            --benchmark_repetitions=5 \
+            --benchmark_report_aggregates_only=true \
+            --benchmark_min_time=0.1s \
+            --benchmark_out=perf-out/bench.json \
+            --benchmark_out_format=json 2>&1 | tee perf-out/bench.log
+
+      # ── Custom latency harness: cycle-level p50..p99.9/max + CPI ──────
+      - name: RDTSC latency harness (hot-cache, per-op cycle percentiles)
+        run: |
+          TS=(taskset -c 2); [ "$(nproc)" -lt 3 ] && TS=(taskset -c 0)
+          "${TS[@]}" ./build-rel/hft_rdtsc_bench 2>&1 | tee perf-out/rdtsc.txt
+
+      # ── Cold vs hot cache ─────────────────────────────────────────────
+      - name: Cold-cache vs hot-cache (drop_caches, best-effort)
+        continue-on-error: true
+        run: |
+          TS=(taskset -c 2); [ "$(nproc)" -lt 3 ] && TS=(taskset -c 0)
+          sudo sysctl -qw vm.drop_caches=3 || echo "::warning::drop_caches unavailable on this runner"
+          "${TS[@]}" ./build-rel/hft_rdtsc_bench 2>&1 | tee perf-out/rdtsc-cold.txt
+          "${TS[@]}" ./build-rel/hft_rdtsc_bench 2>&1 | tee perf-out/rdtsc-hot.txt
+          echo "[note] cold run = first run after cache drop (worst case); hot run = steady state."
+
+      # ── Linux perf: hardware counters ─────────────────────────────────
+      - name: perf stat — hardware counters (cycles/IPC/cache/branch, -r 3)
+        continue-on-error: true
+        run: |
+          [ -n "${PERFBIN:-}" ] || { echo "::warning::perf unavailable"; exit 0; }
+          TS=(taskset -c 2); [ "$(nproc)" -lt 3 ] && TS=(taskset -c 0)
+          set -o pipefail
+          "${TS[@]}" "$PERFBIN" stat -r 3 \
+            -e cycles,instructions,branches,branch-misses,cache-references,cache-misses,L1-dcache-load-misses,LLC-load-misses,dTLB-load-misses \
+            -- ./build-rel/hft_rdtsc_bench 2>&1 | tee perf-out/perf-stat-hw.log \
+            || echo "::warning::some hardware events <not supported> (virtualized CPU: no PMU) — see Cachegrind leg for cache/branch estimates"
+          # Summarize; mark VM-unavailable events explicitly.
+          grep -E "not supported|Performance counter stats|instructions|branch-misses" perf-out/perf-stat-hw.log \
+            | head -30 | tee perf-out/perf-stat-hw-summary.txt || true
+
+      - name: "perf stat — software counters (VM-safe: page-faults, ctx-switches, migrations)"
+        continue-on-error: true
+        run: |
+          [ -n "${PERFBIN:-}" ] || { echo "::warning::perf unavailable"; exit 0; }
+          TS=(taskset -c 2); [ "$(nproc)" -lt 3 ] && TS=(taskset -c 0)
+          set -o pipefail
+          "${TS[@]}" "$PERFBIN" stat \
+            -e task-clock,page-faults,context-switches,cpu-migrations \
+            -- ./build-rel/hft_rdtsc_bench 2>&1 | tee perf-out/perf-stat-sw.log \
+            || echo "::warning::software counters unavailable on this runner"
+
+      # ── perf record / report / annotate ───────────────────────────────
+      - name: perf record + report + annotate (hot-path attribution)
+        continue-on-error: true
+        run: |
+          [ -n "${PERFBIN:-}" ] || { echo "::warning::perf unavailable"; exit 0; }
+          set -o pipefail
+          TS=(taskset -c 2); [ "$(nproc)" -lt 3 ] && TS=(taskset -c 0)
+          "${TS[@]}" "$PERFBIN" record -e cpu-clock -F 199 -g --call-graph fp \
+            -o perf-out/perf.data -- ./build-reldeb/hft_bench \
+            --benchmark_min_time="${PERF_MIN_TIME}" \
+            --benchmark_filter="${PERF_BENCH_FILTER}" \
+            > perf-out/perf-record.log 2>&1 || true
+          "$PERFBIN" report -i perf-out/perf.data --stdio 2>&1 | tee perf-out/perf_report.txt | head -40 || true
+          HOT="$(grep -m1 -oE "hft::[A-Za-z_:~]+" perf-out/perf_report.txt || true)"
+          if [ -n "$HOT" ]; then
+            echo "$HOT" | tee perf-out/hot_symbol.txt
+            "$PERFBIN" annotate --stdio -i perf-out/perf_data_annotation 2>/dev/null || true
+            "$PERFBIN" annotate --stdio -i perf-out/perf.data 2>&1 | head -80 | tee perf-out/perf_annotate.txt || true
+          else
+            echo "[note] no hft:: symbol in perf report — annotate skipped"
+          fi
+
+      # ── FlameGraph ────────────────────────────────────────────────────
+      - name: FlameGraph (CPU hotspot visualization)
+        continue-on-error: true
+        run: |
+          [ -f perf-out/perf.data ] || { echo "::warning::no perf.data — FlameGraph skipped"; exit 0; }
+          if command -v flamegraph-stackcollapse-perf >/dev/null; then
+            COLLAPSE=(flamegraph-stackcollapse-perf); RENDER=(flamegraph-flamegraph)
+          else
+            git clone --depth 1 https://github.com/brendangregg/FlameGraph /tmp/FG >/dev/null 2>&1 \
+              || { echo "::warning::FlameGraph tools unavailable"; exit 0; }
+            COLLAPSE=(perl /tmp/FG/stackcollapse-perf.pl); RENDER=(perl /tmp/FG/flamegraph.pl)
+          fi
+          set -o pipefail
+          "$PERFBIN" script -i perf-out/perf.data \
+            | "${COLLAPSE[@]}" \
+            | "${RENDER[@]}" --title "hft-matching-engine — CPU hotspots" \
+              --subtitle "$(git rev-parse --short HEAD 2>/dev/null || echo snapshot)" \
+              > perf-out/flamegraph.svg
+          ls -lh perf-out/flamegraph.svg | tee -a perf-out/perf-report.txt || true
+          echo "[OK] flamegraph.svg ready (uploaded with the bundle)"
+
+      # ── Cachegrind: cache + branch simulation (VM-safe) ───────────────
+      - name: Cachegrind (L1/L2/LLC + branch simulation)
+        run: |
+          set -o pipefail
+          valgrind --tool=cachegrind --cache-sim=yes --branch-sim=yes \
+            ./build-rel/hft_rdtsc_bench 2>&1 | tee perf-out/cachegrind.log
+          CG_OUT="$(ls -t cachegrind.out.* 2>/dev/null | head -1 || true)"
+          if [ -n "$CG_OUT" ]; then
+            cg_annotate "$CG_OUT" 2>&1 | head -80 | tee perf-out/cg_annotate.txt
+            mv "$CG_OUT" perf-out/ || true
+          fi
+
+      # ── Callgrind: function-level costs ───────────────────────────────
+      - name: Callgrind (function-level profiling)
+        run: |
+          set -o pipefail
+          valgrind --tool=callgrind --callgrind-out-file=perf-out/callgrind.out \
+            ./build-rel/hft_bench --benchmark_min_time=0.02s \
+            --benchmark_filter="${PERF_BENCH_FILTER}" 2>&1 | tee perf-out/callgrind.log
+          callgrind_annotate perf-out/callgrind.out 2>&1 | head -80 | tee perf-out/callgrind_annotate.txt
+
+      # ── Assembly inspection + vectorization report ────────────────────
+      - name: Assembly inspection + compiler vectorization report
+        continue-on-error: true
+        run: |
+          objdump -d --demangle build-rel/hft_engine > perf-out/hft_engine.asm || true
+          HOT="$(cat perf-out/hot_symbol.txt 2>/dev/null || true)"
+          [ -n "$HOT" ] || HOT="match_orders"   # known hot path fallback
+          echo "[*] hot symbol: $HOT"
+          sed -n "/<${HOT}[^>]*>:/,/^$/p" perf-out/hft_engine.asm 2>/dev/null \
+            | tee perf-out/asm-hot.txt | head -60 || true
+          N_ASM="$(grep -cE '^[[:space:]]+[0-9a-f]+:' perf-out/asm-hot.txt 2>/dev/null || echo 0)"
+          echo "[*] static instruction count of hot symbol: $N_ASM"
+          # Vectorization / missed-optimization remarks on the hot file:
+          clang++-18 -std=c++20 -DNDEBUG -O3 -I src -fsyntax-only \
+            -Rpass=loop-vectorize -Rpass-missed=loop-vectorize \
+            src/OrderBook.cpp 2>&1 | tee perf-out/vectorize.log | head -40 || true
+
+      # ── Allocation-path proof: no allocator calls on the hot path ─────
+      - name: Allocation-path proof (LD_PRELOAD malloc counter)
+        run: |
+          cat > /tmp/malloc_counter.c <<'MC'
+          #define _GNU_SOURCE
+          #include <dlfcn.h>
+          #include <stddef.h>
+          #include <stdio.h>
+          static long n_alloc, n_free;
+          static int initializing;
+          static char boot[65536]; static size_t boot_off;
+          static void *(*r_malloc)(size_t);
+          static void *(*r_calloc)(size_t, size_t);
+          static void *(*r_realloc)(void *, size_t);
+          static void (*r_free)(void *);
+          static void *boot_alloc(size_t n) {
+              if (boot_off + n > sizeof boot) return 0;
+              void *p = boot + boot_off; boot_off += n; return p; /* zeroed: static */
+          }
+          static void init(void) {
+              initializing = 1;
+              r_malloc  = (void *(*)(size_t))dlsym(RTLD_NEXT, "malloc");
+              r_calloc  = (void *(*)(size_t, size_t))dlsym(RTLD_NEXT, "calloc");
+              r_realloc = (void *(*)(void *, size_t))dlsym(RTLD_NEXT, "realloc");
+              r_free    = (void (*)(void *))dlsym(RTLD_NEXT, "free");
+              initializing = 0;
+          }
+          void *malloc(size_t n) {
+              if (!r_malloc) { if (!initializing) init(); if (r_malloc) return r_malloc(n); return boot_alloc(n); }
+              ++n_alloc; return r_malloc(n);
+          }
+          void *calloc(size_t a, size_t b) {
+              if (!r_calloc) { if (!initializing) init(); if (r_calloc) return r_calloc(a, b); return boot_alloc(a * b); }
+              ++n_alloc; return r_calloc(a, b);
+          }
+          void *realloc(void *p, size_t n) {
+              if (!r_realloc) { if (!initializing) init(); if (r_realloc) return r_realloc(p, n); return boot_alloc(n); }
+              ++n_alloc; return r_realloc(p, n);
+          }
+          void free(void *p) {
+              if (!r_free) { if (!initializing) init(); if (r_free) { if (p) ++n_free; r_free(p); return; } return; }
+              if (p) ++n_free; r_free(p);
+          }
+          __attribute__((destructor)) static void report(void) {
+              fprintf(stderr, "[malloc-counter] allocations=%ld frees=%ld\n", n_alloc, n_free);
+          }
+          MC
+          cc -shared -fPIC -O2 -Wall -Wextra -o /tmp/malloc_counter.so /tmp/malloc_counter.c
+          set -o pipefail
+          LD_PRELOAD=/tmp/malloc_counter.so ./build-rel/hft_rdtsc_bench 2>&1 | tee perf-out/alloc-path.log
+          echo "[note] count covers harness setup + steady-state; the engine hot path must add ~0 — see the totals above."
+
+      # ── NUMA + mlockall + environment report ──────────────────────────
+      - name: NUMA + mlockall + environment report (frequency/turbo/thermal)
+        continue-on-error: true
+        run: |
+          {
+            echo "== NUMA topology =="; numactl --hardware || echo "N/A";
+            echo; echo "== memlock limit =="; ulimit -l;
+            echo; echo "== engine mlockall path (unlimited memlock via prlimit) ==";
+            sudo prlimit --memlock=unlimited:unlimited --pid $$ 2>/dev/null \
+              || echo "::warning::prlimit unavailable on this host — engine runs unlocked (informational)";
+            timeout 120 ./build-rel/hft_engine 2>&1 | tail -5;
+            grep -E "Memory locked successfully|running unlocked|pageable" <(timeout 120 ./build-rel/hft_engine 2>&1) || true;
+          } 2>&1 | tee perf-out/environment.log
+          # Single-node VM: numactl binding is a no-op but proves the plumbing.
+          numactl --cpunodebind=0 --membind=0 ./build-rel/hft_rdtsc_bench 2>&1 | tee perf-out/rdtsc-numa.log || true
+          # Turbo / frequency / thermal: virtualized CPU — report presence.
+          for d in /sys/devices/system/cpu/cpu2/cpufreq /sys/class/thermal; do
+            if [ -d "$d" ]; then echo "[*] $d present"; ls "$d" | head -5; else echo "[*] $d: N/A (virtualized CPU — no frequency/thermal interface)"; fi
+          done | tee -a perf-out/environment.log
+          grep -m4 -E "model name|MHz" /proc/cpuinfo | tee -a perf-out/environment.log || true
+
+      # (The comparative tuning legs — compiler / -O / LTO / PGO /
+      # -march=native / binary size — moved to the NON-BLOCKING
+      # `performance-lab` job; this gating job stays measurement-only.)
+
+
+      # ── Benchmark regression vs baseline (95% CI, warnings not errors) ─
+      # VM noise makes hard gates dishonest: regressions raise ::warning::
+      # annotations and land in perf-report.md; they never fail the job.
+      - name: Benchmark regression vs baseline (95% CI)
+        run: |
+          python3 - <<'PY' 2>&1 | tee perf-out/perf-report.md
+          import json, math, os, re, sys
+
+          RDTSC = re.compile(r"^(?P<name>.+?)\s+n=\s*\d+\s+p50=\s*(?P<p50>[\d.]+)\s+p90=\s*(?P<p90>[\d.]+)\s+p99=\s*(?P<p99>[\d.]+)\s+p99\.9=\s*(?P<p999>[\d.]+)\s+max=\s*(?P<max>[\d.]+)")
+          MULT = {"ns": 1.0, "us": 1e3, "ms": 1e6, "s": 1e9}
+
+          def load_bench(path):
+              out = {}
+              if not os.path.exists(path):
+                  return out
+              try:
+                  entries = json.load(open(path))["benchmarks"]
+              except Exception:
+                  return out
+              for e in entries:
+                  if e.get("run_type") != "aggregate":
+                      continue
+                  key = e["name"].split("/")[0]
+                  unit = MULT.get(e.get("time_unit", "ns"), 1.0)
+                  out.setdefault(key, {})[e.get("aggregate_name", "?")] = \
+                      e.get("real_time", 0.0) * unit
+              return out
+
+          def load_rdtsc(path):
+              out = {}
+              if not os.path.exists(path):
+                  return out
+              for line in open(path, errors="replace"):
+                  m = RDTSC.match(line.strip())
+                  if m:
+                      out[m.group("name")] = {k: float(m.group(k)) for k in ("p50", "p99", "p999", "max")}
+              return out
+
+          cur_b, base_b = load_bench("perf-out/bench.json"), load_bench(".perf-baseline/bench.json")
+          cur_r, base_r = load_rdtsc("perf-out/rdtsc.txt"), load_rdtsc(".perf-baseline/rdtsc.txt")
+
+          print("# Performance report — benchmark regression vs baseline")
+          print()
+          if not base_b and not base_r:
+              print("No baseline yet — this run records one (default branch only).")
+              sys.exit(0)
+
+          flagged = 0
+          print("## Google Benchmark (mean ns/op, 95% CI = 1.96*std/sqrt(5))")
+          print(f"{'benchmark':<44}{'baseline':>12}{'current':>12}{'delta%':>9}")
+          for k in sorted(set(cur_b) & set(base_b)):
+              b, c = base_b.get(k, {}), cur_b.get(k, {})
+              bm, cm = b.get("mean"), c.get("mean")
+              if bm is None or cm is None or bm <= 0:
+                  continue
+              delta = (cm - bm) / bm * 100.0
+              std = c.get("stddev", 0.0)
+              ci = 1.96 * std / math.sqrt(5) if std else 0.0
+              print(f"{k:<44}{bm:>12.1f}{cm:>12.1f}{delta:>+8.1f}%   ±{ci:.1f}")
+              if delta > 15.0:
+                  print(f"::warning::benchmark regression: {k} mean {delta:+.1f}% (> +15%)")
+                  flagged += 1
+
+          print()
+          print("## RDTSC latency harness (CPU cycles: p50 / p99.9 / max)")
+          print(f"{'scenario':<48}{'metric':>7}{'baseline':>12}{'current':>12}{'delta%':>9}")
+          for k in sorted(set(cur_r) & set(base_r)):
+              b, c = base_r[k], cur_r[k]
+              for metric, thr in (("p50", 15.0), ("p999", 25.0), ("max", 40.0)):
+                  bv, cv = b.get(metric), c.get(metric)
+                  if bv is None or cv is None or bv <= 0:
+                      continue
+                  delta = (cv - bv) / bv * 100.0
+                  print(f"{k:<48}{metric:>7}{bv:>12.1f}{cv:>12.1f}{delta:>+8.1f}%")
+                  if delta > thr:
+                      print(f"::warning::latency regression: {k} {metric} {delta:+.1f}% (> +{thr:.0f}%)")
+                      flagged += 1
+
+          print()
+          print(f"{flagged} regression(s) flagged. Warnings only — hosted-VM noise makes hard gates dishonest.")
+          PY
+
+      # ── Record baseline on the default branch, then save the cache ────
+      - name: Record baseline (main only)
+        if: github.ref == 'refs/heads/main'
+        run: |
+          mkdir -p .perf-baseline
+          cp perf-out/bench.json perf-out/rdtsc.txt .perf-baseline/
+          echo "[OK] baseline updated on the default branch"
+
+      - name: Save baseline cache (main only)
+        if: github.ref == 'refs/heads/main'
+        # actions/cache/save v4.2.3 — the /save SUBACTION of the
+        # actions/cache repo (subaction syntax is "owner/repo/subdir@ref";
+        # same commit as actions/cache v4.2.3 — the save/ directory exists
+        # at that SHA). Split restore/save is the documented pattern for
+        # "restore early with restore-keys, save conditionally at the
+        # end": the combined action would save on every successful run,
+        # not just main.
+        uses: actions/cache/save@5a3ec84eff668545956fd18022155c47e93e2684
+        with:
+          path: .perf-baseline
+          key: perf-baseline-${{ github.run_id }}
+
+      - name: Upload performance bundle
+        if: always()
         # actions/upload-artifact v4.6.2
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
-          name: fuzz-crash-artifacts
+          name: performance-bundle
           path: |
-            crash-*
-            oom-*
-            timeout-*
-            leak-*
-          if-no-files-found: ignore
+            perf-out/
+            perf-numa-topology.txt
+            perf-tool-probe.log
           retention-days: 30
+          if-no-files-found: warn
+
+  # ══════════════════════════════════════════════════════════════════════
+  # PERFORMANCE LAB (NON-BLOCKING) — comparative tuning evidence:
+  #   compiler (gcc vs clang) / -O0 vs -O2 vs -O3 / LTO on-vs-off /
+  #   -march=native / PGO / binary size.
+  # Every leg is an A/B measurement, not a gate: the whole job is
+  # continue-on-error, so a red or timed-out lab NEVER fails the pipeline.
+  # Skippable per manual run (deep_perf input). It needs its own reference
+  # build (separate runner from the `performance` job).
+  # ══════════════════════════════════════════════════════════════════════
+  performance-lab:
+    name: performance lab (compiler / -O / LTO / PGO / -march A/B)
+    needs: correctness
+    runs-on: ubuntu-24.04
+    continue-on-error: true          # evidence, never a gate
+    timeout-minutes: 45
+    # Runs by default (push/PR/nightly); manual runs can disable it.
+    if: ${{ github.event_name != 'workflow_dispatch' || inputs.deep_perf == true }}
+    steps:
+      - name: Check out sources
+        # actions/checkout v4.2.2
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+
+      - name: Install lab tools (shared apt composite)
+        # if-missing + warning-degrade: an absent llvm-18 only skips PGO.
+        uses: ./.github/actions/setup-apt
+        with:
+          if-missing: llvm-profdata-18:llvm-18
+
+      - name: Reference build — Release (gcc)
+        run: |
+          mkdir -p perf-out
+          cmake -B build-rel -DCMAKE_BUILD_TYPE=Release -DCMAKE_CXX_COMPILER=g++-13
+          cmake --build build-rel --target hft_engine hft_bench hft_rdtsc_bench -j"$(nproc)"
+
+      # ── Compiler comparison: gcc vs clang ──────────────────────────────
+      - name: Compiler comparison (gcc vs clang)
+        run: |
+          cat > /tmp/rdtsc_table.py <<'PY'
+          #!/usr/bin/env python3
+          """Side-by-side p50/p99.9 table (CPU cycles) across RDTSC harness logs."""
+          import re, sys
+          PAT = re.compile(r"^(?P<name>.+?)\s+n=\s*\d+\s+p50=\s*(?P<p50>[\d.]+)\s+p90=\s*(?P<p90>[\d.]+)\s+p99=\s*(?P<p99>[\d.]+)\s+p99\.9=\s*(?P<p999>[\d.]+)\s+max=\s*(?P<max>[\d.]+)\s+mean=\s*(?P<mean>[\d.]+)")
+          def parse(path):
+              out = {}
+              for line in open(path, errors="replace"):
+                  m = PAT.match(line.strip())
+                  if m:
+                      out[m.group("name")] = (m.group("p50"), m.group("p999"))
+              return out
+          logs = [(p, parse(p)) for p in sys.argv[1:]]
+          if not logs:
+              sys.exit("usage: rdtsc_table.py LOG [LOG...]")
+          names = []
+          for _, d in logs:
+              names += [n for n in d if n not in names]
+          hdr = f"{'scenario (p50/p99.9 cycles)':<48}" + "".join(f"{p.split('/')[-1]:>24}" for p, _ in logs)
+          print(hdr); print("-" * len(hdr))
+          for n in names:
+              row = f"{n:<48}"
+              for _, d in logs:
+                  e = d.get(n)
+                  row += f"{(e[0] + '/' + e[1]) if e else '-':>24}"
+              print(row)
+          PY
+          cmake -B build-rel-clang -DCMAKE_BUILD_TYPE=Release -DCMAKE_CXX_COMPILER=clang++-18 \
+            -DFETCHCONTENT_SOURCE_DIR_GOOGLETEST="$PWD/build-rel/_deps/googletest-src" \
+            -DFETCHCONTENT_SOURCE_DIR_GOOGLEBENCHMARK="$PWD/build-rel/_deps/googlebenchmark-src"
+          cmake --build build-rel-clang --target hft_bench hft_rdtsc_bench -j"$(nproc)"
+          TS=(taskset -c 2); [ "$(nproc)" -lt 3 ] && TS=(taskset -c 0)
+          "${TS[@]}" ./build-rel/hft_rdtsc_bench        2>&1 | tee perf-out/rdtsc-gcc.txt   | tail -20
+          "${TS[@]}" ./build-rel-clang/hft_rdtsc_bench  2>&1 | tee perf-out/rdtsc-clang.txt | tail -20
+          "${TS[@]}" ./build-rel/hft_bench       --benchmark_min_time=0.02s --benchmark_filter="${PERF_BENCH_FILTER}" 2>&1 | tee perf-out/bench-gcc.log   | tail -25
+          "${TS[@]}" ./build-rel-clang/hft_bench --benchmark_min_time=0.02s --benchmark_filter="${PERF_BENCH_FILTER}" 2>&1 | tee perf-out/bench-clang.log | tail -25
+          echo; echo "── RDTSC latency: gcc vs clang (p50/p99.9 CPU cycles) ──"
+          python3 /tmp/rdtsc_table.py perf-out/rdtsc-gcc.txt perf-out/rdtsc-clang.txt | tee perf-out/compiler-comparison.txt
+
+      # ── Optimization comparison: -O0 vs -O2 vs -O3 (uniform minimal set) ─
+      - name: Optimization comparison (-O0 / -O2 / -O3)
+        run: |
+          TS=(taskset -c 2); [ "$(nproc)" -lt 3 ] && TS=(taskset -c 0)
+          for o in 0 2 3; do
+            cmake -B "build-o$o" -DCMAKE_BUILD_TYPE=Release -DCMAKE_CXX_COMPILER=g++-13 \
+              -DCMAKE_CXX_FLAGS_RELEASE="-O$o -DNDEBUG -g" \
+              -DFETCHCONTENT_SOURCE_DIR_GOOGLETEST="$PWD/build-rel/_deps/googletest-src" \
+              -DFETCHCONTENT_SOURCE_DIR_GOOGLEBENCHMARK="$PWD/build-rel/_deps/googlebenchmark-src" >/dev/null
+            cmake --build "build-o$o" --target hft_rdtsc_bench -j"$(nproc)" >/dev/null
+            "${TS[@]}" "./build-o$o/hft_rdtsc_bench" 2>&1 | tee "perf-out/rdtsc-O$o.txt" | tail -12
+          done
+          echo; echo "── RDTSC latency by optimization level ──"
+          python3 /tmp/rdtsc_table.py perf-out/rdtsc-O0.txt perf-out/rdtsc-O2.txt perf-out/rdtsc-O3.txt | tee perf-out/opt-comparison.txt
+
+      # ── LTO benefit (default ON in CMakeLists vs HFT_DISABLE_IPO=ON) ──
+      - name: LTO comparison (on by default vs off)
+        run: |
+          cmake -B build-lto-off -DCMAKE_BUILD_TYPE=Release -DCMAKE_CXX_COMPILER=g++-13 \
+            -DHFT_DISABLE_IPO=ON \
+            -DFETCHCONTENT_SOURCE_DIR_GOOGLETEST="$PWD/build-rel/_deps/googletest-src" \
+            -DFETCHCONTENT_SOURCE_DIR_GOOGLEBENCHMARK="$PWD/build-rel/_deps/googlebenchmark-src" >/dev/null
+          cmake --build build-lto-off --target hft_bench hft_rdtsc_bench -j"$(nproc)" >/dev/null
+          TS=(taskset -c 2); [ "$(nproc)" -lt 3 ] && TS=(taskset -c 0)
+          "${TS[@]}" ./build-lto-off/hft_rdtsc_bench 2>&1 | tee perf-out/rdtsc-lto-off.txt | tail -12
+          "${TS[@]}" ./build-lto-off/hft_bench --benchmark_min_time=0.02s --benchmark_filter="${PERF_BENCH_FILTER}" 2>&1 | tee perf-out/bench-lto-off.log | tail -25
+          echo; echo "── RDTSC latency: LTO on (default, gcc reference) vs LTO off ──"
+          python3 /tmp/rdtsc_table.py perf-out/rdtsc-gcc.txt perf-out/rdtsc-lto-off.txt | tee perf-out/lto-comparison.txt
+
+      # ── -march=native (architecture-specific optimization) ────────────
+      - name: -march=native comparison (best-effort)
+        continue-on-error: true
+        run: |
+          cmake -B build-march -DCMAKE_BUILD_TYPE=Release -DCMAKE_CXX_COMPILER=g++-13 \
+            -DHFT_MARCH_NATIVE=ON \
+            -DFETCHCONTENT_SOURCE_DIR_GOOGLETEST="$PWD/build-rel/_deps/googletest-src" \
+            -DFETCHCONTENT_SOURCE_DIR_GOOGLEBENCHMARK="$PWD/build-rel/_deps/googlebenchmark-src" >/dev/null
+          cmake --build build-march --target hft_bench hft_rdtsc_bench -j"$(nproc)" >/dev/null
+          TS=(taskset -c 2); [ "$(nproc)" -lt 3 ] && TS=(taskset -c 0)
+          "${TS[@]}" ./build-march/hft_rdtsc_bench 2>&1 | tee perf-out/rdtsc-march.txt | tail -12
+          echo; echo "── RDTSC latency: baseline ISA vs -march=native (gcc) ──"
+          python3 /tmp/rdtsc_table.py perf-out/rdtsc-gcc.txt perf-out/rdtsc-march.txt | tee perf-out/march-comparison.txt
+
+      # ── PGO (clang): -fprofile-generate → train → -fprofile-use ───────
+      - name: PGO comparison (clang, best-effort)
+        continue-on-error: true
+        run: |
+          # llvm-profdata-18 was installed (or warned about) by the
+          # setup-apt composite's if-missing pair; skip if still absent.
+          command -v llvm-profdata-18 >/dev/null \
+            || { echo "::warning::llvm-profdata unavailable — PGO leg skipped"; exit 0; }
+          # Canonical Release flags come from the gcc build's cache; the
+          # same string is compiler-agnostic in CMakeLists.txt. Add -flto for
+          # parity with build-rel-clang, whose IPO property adds it there.
+          BASE="$(grep -m1 '^CMAKE_CXX_FLAGS_RELEASE:STRING=' build-rel/CMakeCache.txt | cut -d= -f2-) -flto"
+          SHARED=(-DFETCHCONTENT_SOURCE_DIR_GOOGLETEST="$PWD/build-rel/_deps/googletest-src" \
+                  -DFETCHCONTENT_SOURCE_DIR_GOOGLEBENCHMARK="$PWD/build-rel/_deps/googlebenchmark-src")
+          cmake -B build-pgo-gen -DCMAKE_BUILD_TYPE=Release -DCMAKE_CXX_COMPILER=clang++-18 \
+            -DCMAKE_CXX_FLAGS_RELEASE="$BASE -fprofile-generate" "${SHARED[@]}" >/dev/null
+          cmake --build build-pgo-gen --target hft_bench hft_rdtsc_bench -j"$(nproc)" >/dev/null
+          rm -f hft-*.profraw hft.profdata
+          LLVM_PROFILE_FILE="$PWD/hft-%p.profraw" ./build-pgo-gen/hft_bench \
+            --benchmark_min_time=0.02s --benchmark_filter="${PERF_BENCH_FILTER}" >/dev/null 2>&1 || true
+          LLVM_PROFILE_FILE="$PWD/hft-%p.profraw" ./build-pgo-gen/hft_rdtsc_bench >/dev/null 2>&1 || true
+          llvm-profdata-18 merge -output=hft.profdata hft-*.profraw
+          cmake -B build-pgo-use -DCMAKE_BUILD_TYPE=Release -DCMAKE_CXX_COMPILER=clang++-18 \
+            -DCMAKE_CXX_FLAGS_RELEASE="$BASE -fprofile-use=$PWD/hft.profdata" "${SHARED[@]}" >/dev/null
+          cmake --build build-pgo-use --target hft_bench hft_rdtsc_bench -j"$(nproc)" >/dev/null
+          TS=(taskset -c 2); [ "$(nproc)" -lt 3 ] && TS=(taskset -c 0)
+          "${TS[@]}" ./build-pgo-use/hft_rdtsc_bench 2>&1 | tee perf-out/rdtsc-pgo.txt | tail -12
+          echo; echo "── RDTSC latency: clang (no PGO) vs clang (PGO) ──"
+          python3 /tmp/rdtsc_table.py perf-out/rdtsc-clang.txt perf-out/rdtsc-pgo.txt | tee perf-out/pgo-comparison.txt
+
+      # ── Binary size / code-size (I-cache) tradeoffs ───────────────────
+      - name: Binary size across tuning builds
+        run: |
+          size $(ls build-rel/hft_engine build-rel-clang/hft_engine build-lto-off/hft_engine \
+                    build-march/hft_engine build-pgo-use/hft_engine 2>/dev/null) 2>/dev/null \
+            | tee perf-out/binary-size.txt || echo "[note] some tuning builds absent — see above"
+
+      - name: Upload lab bundle
+        if: always()
+        # actions/upload-artifact v4.6.2
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: performance-lab-bundle
+          path: perf-out/
+          retention-days: 30
+          if-no-files-found: warn

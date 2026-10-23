@@ -1,0 +1,46 @@
+name: setup-apt
+description: >
+  Drop the runner image's unsigned Microsoft apt source, apt-get update,
+  then install packages. Shared by every ci.yml job that needs apt —
+  this cleanup used to be copy-pasted into 4+ jobs.
+  Why the Microsoft source must go: its InRelease for the current Ubuntu
+  release can be unsigned on the runner image, which makes
+  `apt-get update` exit 100 and takes the job down before anything runs.
+inputs:
+  packages:
+    description: "Space-separated packages to install (empty = update only)"
+    required: false
+    default: ""
+  if-missing:
+    description: >-
+      Space-separated command:package pairs. Each package is installed only
+      when the command is not already on PATH (e.g. 'clang-tidy-18:clang-tidy-18').
+      An install failure degrades to a ::warning:: — for packages that may
+      legitimately be absent from the archive on some images.
+    required: false
+    default: ""
+runs:
+  using: composite
+  steps:
+    - name: Clean apt sources + update + install
+      shell: bash
+      run: |
+        set -euo pipefail
+        sudo rm -f /etc/apt/sources.list.d/microsoft-*.list \
+                   /etc/apt/sources.list.d/microsoft-*.sources
+        sudo apt-get update -qq
+        if [ -n "${{ inputs.packages }}" ]; then
+          # word-splitting is intentional: the input is a package list
+          # shellcheck disable=SC2086
+          sudo apt-get install -y -qq ${{ inputs.packages }}
+        fi
+        for pair in ${{ inputs.if-missing }}; do
+          cmd="${pair%%:*}"
+          pkg="${pair#*:}"
+          if command -v "$cmd" >/dev/null; then
+            echo "[setup-apt] $cmd already present"
+          else
+            sudo apt-get install -y -qq "$pkg" \
+              || echo "::warning::[setup-apt] $pkg unavailable ($cmd will be missing; downstream steps must degrade)"
+          fi
+        done

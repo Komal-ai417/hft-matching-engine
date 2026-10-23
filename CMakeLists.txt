@@ -112,16 +112,46 @@ endif()
 # ══════════════════════════════════════════════════════════════════
 # LTO / IPO — Release-like flavors only (a directory-wide setting would also
 # LTO the sanitizer Debug build, slowing it for no benefit).
+#
+# Two silent-failure traps fixed here (both proven on cmake 3.28):
+#
+#   1. check_ipo_supported() without LANGUAGES checks every language in the
+#      global ENABLED_LANGUAGES list — and by this point FetchContent
+#      (googletest) has already enabled C as a side effect of its own
+#      project() call. The spurious C leg then fails ("CMake doesn't support
+#      IPO for current C compiler"), the whole check reports NO, and LTO
+#      stays off in every Release / Audit / RelWithDebInfo build even though
+#      the block above claims it is on. We are a CXX-only project:
+#      pass LANGUAGES CXX, nothing else.
+#
+#   2. The INTERPROCEDURAL_OPTIMIZATION *directory property* no longer
+#      exists ("This directory property does not exist anymore" —
+#      cmake --help-property INTERPROCEDURAL_OPTIMIZATION), so the previous
+#      set_property(DIRECTORY ...) was a silent no-op: even when the check
+#      passed, it enabled LTO exactly nowhere. The supported mechanism is
+#      the CMAKE_INTERPROCEDURAL_OPTIMIZATION *variable*, which initializes
+#      the target property of every target created after it — i.e. ours,
+#      not the already-created googletest/benchmark (no point LTO-ing
+#      third-party code).
+#
+# HFT_DISABLE_IPO lets CI (and curious developers) measure what LTO is
+# actually worth: the default build has it ON, and
+# `cmake -DHFT_DISABLE_IPO=ON` produces the A/B comparison leg.
 # ══════════════════════════════════════════════════════════════════
-if(NOT MINGW AND NOT CMAKE_BUILD_TYPE STREQUAL "Debug")
+option(HFT_DISABLE_IPO
+    "Force IPO/LTO off even when supported (A/B performance comparison leg)" OFF)
+
+if(NOT MINGW AND NOT HFT_DISABLE_IPO AND NOT CMAKE_BUILD_TYPE STREQUAL "Debug")
     include(CheckIPOSupported)
-    check_ipo_supported(RESULT ipo_supported OUTPUT ipo_error)
+    check_ipo_supported(RESULT ipo_supported OUTPUT ipo_error LANGUAGES CXX)
     if(ipo_supported)
         message(STATUS "IPO/LTO is supported and enabled for ${CMAKE_BUILD_TYPE}.")
-        set_property(DIRECTORY PROPERTY INTERPROCEDURAL_OPTIMIZATION TRUE)
+        set(CMAKE_INTERPROCEDURAL_OPTIMIZATION ON)
     else()
         message(STATUS "IPO/LTO is not supported: ${ipo_error}")
     endif()
+elseif(HFT_DISABLE_IPO)
+    message(STATUS "IPO/LTO disabled by HFT_DISABLE_IPO (A/B comparison leg).")
 else()
     message(STATUS "IPO/LTO skipped for ${CMAKE_BUILD_TYPE}.")
 endif()
