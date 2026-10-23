@@ -156,10 +156,12 @@ from the API that actually compiles.
 
 ## Build Instructions
 
-Dependencies (GoogleTest, Google Benchmark) are automatically downloaded via CMake FetchContent — no manual installation required.
+Dependencies (GoogleTest, Google Benchmark) are automatically downloaded via CMake FetchContent — no manual installation required. (Google Benchmark is opt-in under MSVC — `HFT_BUILD_BENCHMARK`, OFF by default there — so a plain Windows build only fetches GoogleTest.)
 
 ### Prerequisites
 - GCC / G++ (or Clang) with C++20 support
+- MSVC 19.x (Visual Studio 2022) also builds the engine and tests — CI
+  probes it as a non-blocking portability leg on `windows-2022`
 - CMake ≥ 3.14
 
 ### Building (Release)
@@ -228,7 +230,7 @@ of bug can never ship green again.
 ./build/hft_engine
 
 # Full Google Test suite via ctest:
-#   Debug/Audit builds: 111 tests | Release: 87 (debug-only cases compile out)
+#   Debug/Audit builds: 112 tests | Release: 87 (debug-only cases compile out)
 ctest --test-dir build --output-on-failure
 
 # Real-world simulation (5M events by default; pass a count to smoke-run)
@@ -321,6 +323,7 @@ Comprehensive technical documentation is available in the [docs/](docs/) directo
 | [Hardware Sympathy & Profiling](docs/1_Hardware_Sympathy_And_Profiling.md) | Cache miss analysis, IPC profiling, bitset operation costs, and environment specifications. |
 | [Architecture & Memory Layout](docs/2_Architecture_And_Memory_Layout.md) | Deep-dive into `MemoryPool` mechanics, intrusive linked lists, data structure justifications with $O(1)$ complexity proofs. |
 | [Test Plan & Correctness Matrix](docs/3_Test_Plan_And_Correctness_Matrix.md) | Formal test matrix covering priority logic, boundary inputs, memory safety, and sanitizer CI integration. |
+| [Test Infrastructure & Tooling](docs/5_Test_Infrastructure.md) | Build-flavor matrix, the debugging-aids gear, script recipes, the ten-job CI pipeline (compiler portability matrix incl. the MSVC probe, static analysis, sanitizers, fuzz, Valgrind, performance). |
 | [API Reference](docs/4_API_Reference.md) | Complete reference for all public types, methods, return states, memory layouts, and thread-safety contracts. |
 
 ## Future Enhancements

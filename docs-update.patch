@@ -1,0 +1,218 @@
+diff --git a/CONTRIBUTING.md b/CONTRIBUTING.md
+index 3816838..d3d5dbb 100644
+--- a/CONTRIBUTING.md
++++ b/CONTRIBUTING.md
+@@ -29,32 +29,58 @@ Performance and correctness are critical. All Pull Requests **must** pass the en
+ 
+ - **Run Unit Tests:**
+   ```bash
+-  ./hft_tests
++  cmake --build build -j$(nproc)
++  ctest --test-dir build --output-on-failure
+   ```
++  Debug/Audit builds register **112 tests**; Release registers **87**
++  (debug-only cases compile out via `#if HFT_DEBUG_TOOLS`).
+ - **Run Benchmarks:**
+   ```bash
+-  ./hft_bench
++  ./build/hft_bench
++  ```
++  Ensure benchmark metrics are consistent or improved compared to the `main` branch — CI additionally checks a cached 95%-confidence baseline on every run.
++- **One-command local verification** (everything CI runs, and more — five
++  build flavors, differential-fuzz sweeps, libFuzzer, Valgrind, the strict
++  static gate, the benchmark suite, the RDTSC harness, the simulation and
++  the 4-path engine smoke matrix):
++  ```bash
++  ./scripts/run_all.sh            # full run (~10-20 min depending on host)
++  FAST=1 ./scripts/run_all.sh     # quick mode (shorter fuzz/bench/sim)
++  cat verify-results/*/summary.txt
+   ```
+-  Ensure benchmark metrics are consistent or improved compared to the `main` branch.
+ 
+ ## Sanitizer Verification
+ 
+ Before submitting a Pull Request, you must verify your changes using memory and undefined behavior sanitizers.
+ 
+-1. **Configure Debug build with Sanitizers:**
++1. **Configure a Debug build — sanitizers are ON by default in Debug:**
+    ```bash
+-   mkdir build-debug && cd build-debug
+-   cmake .. -DCMAKE_BUILD_TYPE=Debug -DUSE_SANITIZERS=ON
++   cmake -B build-debug -DCMAKE_BUILD_TYPE=Debug
+    ```
+-   *(Note: You may need to manually add `-fsanitize=address,undefined` to `CMAKE_CXX_FLAGS` if not defined in CMakeLists.txt)*
++   AddressSanitizer and UndefinedBehaviorSanitizer are enabled by default
++   in the Debug flavor. Disable either explicitly with
++   `-DENABLE_ASAN=OFF` / `-DENABLE_UBSAN=OFF` — that is exactly how the CI
++   `correctness` matrix keeps its cells sanitizer-free.
+ 
+ 2. **Build and Run Tests with Sanitizers:**
+    ```bash
+-   cmake --build . -j$(nproc)
+-   ./hft_tests
++   cmake --build build-debug -j$(nproc)
++   ctest --test-dir build-debug --output-on-failure
+    ```
+    The PR will only be accepted if ASAN/UBSAN reports 0 errors and 0 leaks.
+ 
++## Static-Analysis Gate
++
++The tree must stay clean under the same tools CI enforces — all of them
++are run locally by `scripts/run_static.sh`:
++
++- `clang-format` — checked with `--dry-run --Werror` over `src/`, `tests/`
++  and `tools/`. Run `clang-format -i` on everything you touch before
++  committing.
++- `clang-tidy` — strict gate: `.clang-tidy` sets `WarningsAsErrors: '*'`.
++- `cppcheck` — `--enable=warning,portability,performance` with
++  `--error-exitcode=1`; zero findings required.
++
+ ## PR Process
+ 
+ 1. **Branch Naming:**
+@@ -63,5 +89,14 @@ Before submitting a Pull Request, you must verify your changes using memory and
+ 2. **Commit Messages:**
+    Write clear and concise commit messages. Describe *why* the change was made, not just *what* was changed.
+ 
+-3. **PR Template:**
++3. **CI:** every PR runs the ten-job pipeline described in
++   [docs/5_Test_Infrastructure.md](docs/5_Test_Infrastructure.md) §5 —
++   the compiler-portability matrix (gcc/clang × Debug/Release/RelWithDebInfo
++   + clang × Audit), the non-blocking MSVC portability probe, static
++   analysis (format/tidy/analyzer/cppcheck), CodeQL, fuzz, sanitizers,
++   audit mode, Valgrind and the performance legs. The MSVC probe is
++   `continue-on-error`: it surfaces Windows portability findings without
++   blocking the merge.
++
++4. **PR Template:**
+    When opening a PR, carefully read and check off the items in the Pull Request Template. Ensure you have verified zero dynamic allocations on the critical matching path.
+diff --git a/README.md b/README.md
+index c13f8c5..0635ea3 100644
+--- a/README.md
++++ b/README.md
+@@ -156,10 +156,12 @@ from the API that actually compiles.
+ 
+ ## Build Instructions
+ 
+-Dependencies (GoogleTest, Google Benchmark) are automatically downloaded via CMake FetchContent — no manual installation required.
++Dependencies (GoogleTest, Google Benchmark) are automatically downloaded via CMake FetchContent — no manual installation required. (Google Benchmark is opt-in under MSVC — `HFT_BUILD_BENCHMARK`, OFF by default there — so a plain Windows build only fetches GoogleTest.)
+ 
+ ### Prerequisites
+ - GCC / G++ (or Clang) with C++20 support
++- MSVC 19.x (Visual Studio 2022) also builds the engine and tests — CI
++  probes it as a non-blocking portability leg on `windows-2022`
+ - CMake ≥ 3.14
+ 
+ ### Building (Release)
+@@ -228,7 +230,7 @@ of bug can never ship green again.
+ ./build/hft_engine
+ 
+ # Full Google Test suite via ctest:
+-#   Debug/Audit builds: 111 tests | Release: 87 (debug-only cases compile out)
++#   Debug/Audit builds: 112 tests | Release: 87 (debug-only cases compile out)
+ ctest --test-dir build --output-on-failure
+ 
+ # Real-world simulation (5M events by default; pass a count to smoke-run)
+@@ -321,6 +323,7 @@ Comprehensive technical documentation is available in the [docs/](docs/) directo
+ | [Hardware Sympathy & Profiling](docs/1_Hardware_Sympathy_And_Profiling.md) | Cache miss analysis, IPC profiling, bitset operation costs, and environment specifications. |
+ | [Architecture & Memory Layout](docs/2_Architecture_And_Memory_Layout.md) | Deep-dive into `MemoryPool` mechanics, intrusive linked lists, data structure justifications with $O(1)$ complexity proofs. |
+ | [Test Plan & Correctness Matrix](docs/3_Test_Plan_And_Correctness_Matrix.md) | Formal test matrix covering priority logic, boundary inputs, memory safety, and sanitizer CI integration. |
++| [Test Infrastructure & Tooling](docs/5_Test_Infrastructure.md) | Build-flavor matrix, the debugging-aids gear, script recipes, the ten-job CI pipeline (compiler portability matrix incl. the MSVC probe, static analysis, sanitizers, fuzz, Valgrind, performance). |
+ | [API Reference](docs/4_API_Reference.md) | Complete reference for all public types, methods, return states, memory layouts, and thread-safety contracts. |
+ 
+ ## Future Enhancements
+diff --git a/docs/3_Test_Plan_And_Correctness_Matrix.md b/docs/3_Test_Plan_And_Correctness_Matrix.md
+index 8aa0161..b9bd5e9 100644
+--- a/docs/3_Test_Plan_And_Correctness_Matrix.md
++++ b/docs/3_Test_Plan_And_Correctness_Matrix.md
+@@ -1,6 +1,6 @@
+ # Edge Case & Correctness Matrix
+ 
+-Financial matching engines are zero-tolerance systems regarding mathematical correctness and memory safety. The engine is safeguarded by **111 Google Test cases** (87 in Release, where the debug-only cases compile out) split into the following domains.
++Financial matching engines are zero-tolerance systems regarding mathematical correctness and memory safety. The engine is safeguarded by **112 Google Test cases** (87 in Release, where the debug-only cases compile out) split into the following domains.
+ 
+ ## 1. Priority & Market Integrity Logic
+ 
+@@ -48,8 +48,20 @@ inside the LLVM libc++ layer), not in the engine.
+   and does not trip the GTest exception-capturing macros. The libc++
+   exception-string path that triggered the false positive is therefore
+   never reached.
+-- **The CI side:** no `ASAN_OPTIONS` suppression is set anywhere in the
+-  workflow. The gcc/Debug leg re-runs the test binary with a clean
+-  environment to prove none is needed.
++- **The CI side:** the `sanitizers` job runs the suite twice — Debug +
++  ASan + UBSan (leak check at exit, `halt_on_error=1`) and a standalone
++  LeakSanitizer build. No ASan suppression is set anywhere in the workflow;
++  the job's `ASAN_OPTIONS`/`UBSAN_OPTIONS` only *raise* strictness
++  (`strict_string_checks`, `detect_stack_use_after_return`, ...).
+ 
+-**Conclusion (scoped per build flavor):** Debug and Audit builds guarantee double-free and wild-free detection via slot state stamps (`MemoryPool` faults), bounds-check all physical inputs, and verify internal consistency via `validate_book()`. Pure Release builds trust caller invariants by design (zero-overhead contract) — run the Audit flavor in CI before shipping a Release binary. AddressSanitizer/LeakSanitizer runs over the full 111-test suite report zero leaks and zero memory errors; `scripts/run_all.sh` writes the per-phase evidence (including the sanitizer legs) to `verify-results/<UTC-timestamp>/`, with a `summary.txt` roll-up.
++### Regression Tests (post-incident)
++
++- **`JournalCancelEntriesRecordTrueSide`** (`tests/test_debug_aids.cpp`):
++  `cancel_order_impl` used to journal the order's `side` *after* the pool
++  slot was deallocated and poisoned, so Debug/Audit journal records showed
++  `side = 0xDD` for every cancel — a use-after-free read that falsified
++  the audit trail. The fix snapshots the side before the slot is freed;
++  this test replays cancel traffic and asserts every journal record carries
++  the order's true side.
++
++**Conclusion (scoped per build flavor):** Debug and Audit builds guarantee double-free and wild-free detection via slot state stamps (`MemoryPool` faults), bounds-check all physical inputs, and verify internal consistency via `validate_book()`. Pure Release builds trust caller invariants by design (zero-overhead contract) — run the Audit flavor in CI before shipping a Release binary. AddressSanitizer/LeakSanitizer runs over the full 112-test suite report zero leaks and zero memory errors; `scripts/run_all.sh` writes the per-phase evidence (including the sanitizer legs) to `verify-results/<UTC-timestamp>/`, with a `summary.txt` roll-up.
+diff --git a/docs/5_Test_Infrastructure.md b/docs/5_Test_Infrastructure.md
+index c2bf6e7..ce523d5 100644
+--- a/docs/5_Test_Infrastructure.md
++++ b/docs/5_Test_Infrastructure.md
+@@ -59,11 +59,11 @@ which is why CI runs the Audit flavor before any Release artifact ships.
+ | `tests/test_price_level.cpp` | 11 | Direct coverage: append/remove semantics, links both directions, canary, 2k-op shadow-model property test |
+ | `tests/test_orderbook_correctness.cpp` | 24 | Nonzero `min_price`, cancel-best across gaps (both sides), queue-position cancels, multi-maker partial fills, wide-range summary scans (>4096 ticks), word-boundary straddles, pool-exhaustion invariants, market `filled_out` semantics, 5k-op reconciliation |
+ | `tests/test_differential_fuzz.cpp` | 7 configs | Engine vs `StdOrderBook` parity: reject codes, filled qty, full trade streams, resting counts, final-liquidity drains — with `validate_book()` every 128 ops |
+-| `tests/test_debug_aids.cpp` | 8 | Journal sequence fidelity, both latches, fault-handler plumbing, validate_book across a 2k-op scenario matrix |
++| `tests/test_debug_aids.cpp` | 9 | Journal sequence fidelity (incl. the `JournalCancelEntriesRecordTrueSide` post-deallocation regression), both latches, fault-handler plumbing, validate_book across a 2k-op scenario matrix |
+ | `tests/test_std_reference.cpp` | 5 | The reference oracle itself: the `side_map_` leak sentinel, validation parity, market remainder, exhaustion |
+ | `tests/readme_example.cpp` | 1 | A compile-guard for the README API example: the same calls against the enforced noexcept-callback contract |
+ 
+-Counts: **111 tests in Debug/Audit**, **87 in Release** (debug-only cases
++Counts: **112 tests in Debug/Audit**, **87 in Release** (debug-only cases
+ compile out via `#if HFT_DEBUG_TOOLS`).
+ 
+ ## 3. Benchmarks
+@@ -127,14 +127,31 @@ plain-looking headers and dies on `namespace hft`.
+ 
+ ## 5. CI (`.github/workflows/ci.yml`)
+ 
+-* Matrix: gcc/clang × Release/Debug/**Audit**, `-Werror`, ctest-driven.
+-* Engine + simulation + RDTSC smoke runs (a startup crash can never ship
+-  green — that is how the mlockall `std::bad_alloc` bug survived).
+-* Separate `lint` job: clang-format check + clang-tidy on `src/`.
+-* No ASan suppression is set anywhere: the engine is exception-free, so
+-  the libc++ exception-string path that originally tripped the
+-  `alloc_dealloc_mismatch` check is never reached. The gcc/Debug leg
+-  re-runs the test binary with a clean environment to prove it.
++A layered, ten-job pipeline. The design contract: every analysis tool
++runs in exactly ONE job (the run-once dedup contract), `correctness`
++gates the deep legs which run in parallel behind it, and static analysis /
++CodeQL / the MSVC probe start immediately. Supply-chain invariants:
++actions pinned to full commit SHAs, `permissions: contents: read`
++(`security-events: write` for the CodeQL job only), a per-job timeout, and
++concurrency cancellation of superseded runs.
++
++| Job | What it proves |
++| :--- | :--- |
++| `correctness` (matrix) | gcc-13 / clang-18 × Debug / Release / **RelWithDebInfo**, plus one include cell for clang × **Audit** — all `-Werror`, sanitizers OFF (they live in their own job, so the matrix cells stay pure portability legs). One ctest run covers the functional, invariant and differential suites; every cell additionally smoke-runs `hft_engine` and a 200k-event `hft_sim` (a startup crash can never ship green — that is how the mlockall `std::bad_alloc` bug once survived). |
++| `correctness-msvc` | Non-blocking portability probe (VS 2022, `continue-on-error`). Release leg; Debug leg built with `/fsanitize=address` — the MSVC ASan and Debug-CRT DLLs (`clang_rt.asan_dynamic-x86_64.dll`, the `vcruntime140d.dll` family, `ucrtbased.dll`) are copied next to the test exe before ctest, because the toolset's bin dir is not on ctest's PATH and the Windows loader searches the exe's own folder first (without this the exe dies in the loader with `0xc0000135`). |
++| `static-analysis` | clang-format gate (`--dry-run --Werror` over `src/`, `tests/`, `tools/`), strict clang-tidy (`.clang-tidy` sets `WarningsAsErrors: '*'`), Clang Static Analyzer (`scan-build`, with a per-TU `clang --analyze` fallback), cppcheck (`--enable=warning,portability,performance`, zero findings, `--error-exitcode=1`). |
++| `codeql` | CodeQL C/C++ security scan (default suite `security-extended`), SARIF uploaded to the repo's Code scanning tab. |
++| `fuzz` | Rotating-seed differential sweeps + the libFuzzer differential core (ASan+UBSan; budget 60 s per push/PR, 900 s nightly; the corpus is cached across runs so coverage compounds) + a best-effort AFL++ leg; crash artifacts are uploaded on any outcome. |
++| `sanitizers` | Build A: Debug + ASan + UBSan, leak check at exit; Build B: standalone LSan. No ASan suppression is set anywhere — the engine is exception-free, so the libc++ exception-string path that originally tripped the `alloc_dealloc_mismatch` check is never reached; the job's `ASAN_OPTIONS`/`UBSAN_OPTIONS` only *raise* strictness (`halt_on_error`, `strict_string_checks`, ...). |
++| `audit-mode` | The Audit flavor under gcc, run once (the clang × Audit cell lives in the matrix above): full suite + engine smoke under the complete instrumentation gear at `-O2`. |
++| `valgrind` | Valgrind Memcheck (no compiler runtime involved) over the RelWithDebInfo test suite + engine, plus the 4-path engine smoke matrix (default / nolock / madvise-only / gVisor sim) and the 200k-event simulation. |
++| `performance` | Google Benchmark (5 repetitions) + the RDTSC harness, cold- vs hot-cache, `perf stat/record/annotate`, FlameGraph, Cachegrind, Callgrind, assembly/vectorization inspection, an allocation-path proof (`LD_PRELOAD` malloc counter), and a benchmark regression check against a cached baseline (95% CI; baselines are recorded on `main` only). `perf` availability is probed first: on runners where `perf_event_paranoid` blocks counters, the perf-dependent steps degrade to logged warnings instead of failing the job. |
++| `performance-lab` | Non-blocking deep-comparison lab (`continue-on-error`, gated by the `deep_perf` dispatch input): compiler / `-O` level / LTO on-off / `-march` / PGO / binary-size A/B legs. A red or timed-out lab never fails the pipeline. |
++
++The pipeline triggers on push/PR to `main`, on a nightly schedule (02:30
++UTC — deep-fuzz budget + performance trending), and via `workflow_dispatch`
++with tunables (fuzz seconds, sweep iterations, `deep_perf`, baseline
++refresh, CodeQL suite).
+ 
+ ## 6. Fuzzing
+ 

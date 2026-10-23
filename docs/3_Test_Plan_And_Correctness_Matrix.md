@@ -1,6 +1,6 @@
 # Edge Case & Correctness Matrix
 
-Financial matching engines are zero-tolerance systems regarding mathematical correctness and memory safety. The engine is safeguarded by **111 Google Test cases** (87 in Release, where the debug-only cases compile out) split into the following domains.
+Financial matching engines are zero-tolerance systems regarding mathematical correctness and memory safety. The engine is safeguarded by **112 Google Test cases** (87 in Release, where the debug-only cases compile out) split into the following domains.
 
 ## 1. Priority & Market Integrity Logic
 
@@ -48,8 +48,20 @@ inside the LLVM libc++ layer), not in the engine.
   and does not trip the GTest exception-capturing macros. The libc++
   exception-string path that triggered the false positive is therefore
   never reached.
-- **The CI side:** no `ASAN_OPTIONS` suppression is set anywhere in the
-  workflow. The gcc/Debug leg re-runs the test binary with a clean
-  environment to prove none is needed.
+- **The CI side:** the `sanitizers` job runs the suite twice — Debug +
+  ASan + UBSan (leak check at exit, `halt_on_error=1`) and a standalone
+  LeakSanitizer build. No ASan suppression is set anywhere in the workflow;
+  the job's `ASAN_OPTIONS`/`UBSAN_OPTIONS` only *raise* strictness
+  (`strict_string_checks`, `detect_stack_use_after_return`, ...).
 
-**Conclusion (scoped per build flavor):** Debug and Audit builds guarantee double-free and wild-free detection via slot state stamps (`MemoryPool` faults), bounds-check all physical inputs, and verify internal consistency via `validate_book()`. Pure Release builds trust caller invariants by design (zero-overhead contract) — run the Audit flavor in CI before shipping a Release binary. AddressSanitizer/LeakSanitizer runs over the full 111-test suite report zero leaks and zero memory errors; `scripts/run_all.sh` writes the per-phase evidence (including the sanitizer legs) to `verify-results/<UTC-timestamp>/`, with a `summary.txt` roll-up.
+### Regression Tests (post-incident)
+
+- **`JournalCancelEntriesRecordTrueSide`** (`tests/test_debug_aids.cpp`):
+  `cancel_order_impl` used to journal the order's `side` *after* the pool
+  slot was deallocated and poisoned, so Debug/Audit journal records showed
+  `side = 0xDD` for every cancel — a use-after-free read that falsified
+  the audit trail. The fix snapshots the side before the slot is freed;
+  this test replays cancel traffic and asserts every journal record carries
+  the order's true side.
+
+**Conclusion (scoped per build flavor):** Debug and Audit builds guarantee double-free and wild-free detection via slot state stamps (`MemoryPool` faults), bounds-check all physical inputs, and verify internal consistency via `validate_book()`. Pure Release builds trust caller invariants by design (zero-overhead contract) — run the Audit flavor in CI before shipping a Release binary. AddressSanitizer/LeakSanitizer runs over the full 112-test suite report zero leaks and zero memory errors; `scripts/run_all.sh` writes the per-phase evidence (including the sanitizer legs) to `verify-results/<UTC-timestamp>/`, with a `summary.txt` roll-up.
