@@ -57,8 +57,10 @@
 #   both and exits 100. Fix: this workflow installs NO LLVM toolchain from
 #   apt. gcc-13 and clang-18 are preinstalled on the ubuntu-24.04 image and
 #   are used as-is (with libstdc++); only archive packages that never
-#   conflict (valgrind, cppcheck, numactl, flamegraph, linux-tools,
+#   conflict (valgrind, cppcheck, numactl, linux-tools,
 #   aflplusplus) are installed, after dropping the runner image's
+#   (FlameGraph is NOT among them: it is not packaged for noble — the
+#   FlameGraph step renders via a commit-pinned upstream clone instead.)
 #   unsigned Microsoft apt source (whose InRelease breaks `apt-get update`).
 #   The libc++ leg is intentionally dropped: it is not part of the
 #   compiler-portability matrix (GCC + Clang + MSVC, all on libstdc++/STL).
@@ -212,7 +214,12 @@ jobs:
         uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
 
       - name: Configure (default VS generator)
-        run: cmake -B build -DCMAKE_BUILD_TYPE=Release
+        # -DHFT_BUILD_BENCHMARK=OFF: benchmark v1.8.3 configures via
+        # try_run() regex feature checks whose programs compile but FAIL
+        # TO RUN on this image — configure died before any target existed.
+        # (CMakeLists auto-OFFs it under MSVC too; the flag keeps the job
+        # self-documenting.) The probe only needs engine + tests.
+        run: cmake -B build -DCMAKE_BUILD_TYPE=Release -DHFT_BUILD_BENCHMARK=OFF
 
       - name: Build + test hft_tests (Release)
         run: |
@@ -691,9 +698,13 @@ jobs:
       - name: Install performance tools (shared apt composite)
         # .github/actions/setup-apt — drops the unsigned Microsoft apt
         # source, updates, installs the listed packages.
+        # NOTE: no `flamegraph` package — it is not packaged for Ubuntu
+        # 24.04 (noble), and the install step hard-fails (exit 100) on an
+        # unknown package. The FlameGraph step below renders via a
+        # commit-pinned upstream clone when the wrapper is not on PATH.
         uses: ./.github/actions/setup-apt
         with:
-          packages: numactl flamegraph valgrind
+          packages: numactl valgrind
 
       - name: Locate perf + probe counter availability
         run: |
@@ -809,7 +820,11 @@ jobs:
           if command -v flamegraph-stackcollapse-perf >/dev/null; then
             COLLAPSE=(flamegraph-stackcollapse-perf); RENDER=(flamegraph-flamegraph)
           else
-            git clone --depth 1 https://github.com/brendangregg/FlameGraph /tmp/FG >/dev/null 2>&1 \
+            # Pinned commit (master @ 2024-10-20): these perl scripts are
+            # EXECUTED, so pin them like the action SHAs — bump deliberately.
+            # Full clone (no --depth 1): the pinned SHA must be reachable.
+            git clone --quiet https://github.com/brendangregg/FlameGraph /tmp/FG >/dev/null 2>&1 \
+              && git -C /tmp/FG checkout --quiet 41fee1f99f9276008b7cd112fca19dc3ea84ac32 \
               || { echo "::warning::FlameGraph tools unavailable"; exit 0; }
             COLLAPSE=(perl /tmp/FG/stackcollapse-perf.pl); RENDER=(perl /tmp/FG/flamegraph.pl)
           fi

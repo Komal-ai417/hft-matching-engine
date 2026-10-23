@@ -8,7 +8,9 @@
 #   scripts/fuzz.sh libfuzzer [seconds]     # clang only
 #   scripts/fuzz.sh seeds [count]           # any compiler, via hft_tests
 # ============================================================================
-set -uo pipefail
+# -e matters: without it a failed compile below used to fall through to
+# executing the (missing) fuzzer binary — exit 127 masking the real error.
+set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 MODE="${1:-auto}"
 
@@ -16,13 +18,18 @@ if [ "$MODE" = "libfuzzer" ]; then
     command -v clang++ >/dev/null || { echo "[X] clang++ required for libFuzzer"; exit 2; }
     SECONDS_TO_RUN="${2:-120}"
     OUT="$ROOT/fuzz-corpus"; mkdir -p "$OUT" "$ROOT/build-fuzz"
-    clang++ -std=c++20 -O2 -g -fsanitize=fuzzer,address,undefined,fuzzer-no-link \
-        -I"$ROOT" "$ROOT/tools/fuzz_driver.cpp" "$ROOT/src/OrderBook.cpp" \
-        -fsanitize=fuzzer -o "$ROOT/build-fuzz/hft_fuzz"
-    "$ROOT/build-fuzz/hft_fuzz" -max_total_time="$SECONDS_TO_RUN" -max_len=8192 "$OUT"
-    rc=$?
-    [ $rc -eq 0 ] && echo "[OK] libFuzzer run clean (corpus: $OUT)"
-    exit $rc
+    # -I tests: fuzz_driver.cpp includes "StdOrderBook.h" (the reference
+    # oracle), which lives in tests/ — the old -I"$ROOT" never resolved it.
+    clang++ -std=c++20 -O2 -g -fsanitize=fuzzer,address,undefined \
+        -I"$ROOT/tests" -I"$ROOT/src" \
+        "$ROOT/tools/fuzz_driver.cpp" "$ROOT/src/OrderBook.cpp" \
+        -o "$ROOT/build-fuzz/hft_fuzz"
+    # `|| rc=$?` (not bare invocation) so set -e lets a found-crash exit
+    # code reach the caller after the status echo.
+    rc=0
+    "$ROOT/build-fuzz/hft_fuzz" -max_total_time="$SECONDS_TO_RUN" -max_len=8192 "$OUT" || rc=$?
+    [ "$rc" -eq 0 ] && echo "[OK] libFuzzer run clean (corpus: $OUT)"
+    exit "$rc"
 fi
 
 # Seed-sweep mode: run the differential suite with rotating seeds by

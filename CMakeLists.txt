@@ -96,10 +96,22 @@ set(BENCHMARK_ENABLE_TESTING OFF CACHE BOOL "" FORCE)
 set(BENCHMARK_ENABLE_WERROR OFF CACHE BOOL "" FORCE)
 set(BENCHMARK_ENABLE_GTEST_TESTS OFF CACHE BOOL "" FORCE)
 
-# Only pull googlebenchmark when a target actually needs it (Debug builds
-# skip benchmarks entirely — sanitizer-instrumented timings are meaningless).
+# google benchmark is opt-in via HFT_BUILD_BENCHMARK, and additionally
+# skipped for Debug builds (sanitizer-instrumented timings are meaningless).
+#
+# Under MSVC the default flips to OFF: benchmark v1.8.3 configures through
+# try_run() feature checks (std/GNU/POSIX regex) whose check programs
+# compile but FAIL TO RUN on the GitHub windows-2022 image ("compiled but
+# failed to run"), so CMake configure aborts before a single target exists.
+# A local MSVC build that wants benchmarks passes -DHFT_BUILD_BENCHMARK=ON.
+if(NOT DEFINED HFT_BUILD_BENCHMARK AND MSVC)
+    set(HFT_BUILD_BENCHMARK OFF)
+endif()
+option(HFT_BUILD_BENCHMARK
+    "Fetch google benchmark and build hft_bench (auto-OFF under MSVC: its try_run() configure checks fail on CI images)" ON)
+
 set(HFT_NEED_BENCHMARK OFF)
-if(NOT CMAKE_BUILD_TYPE STREQUAL "Debug")
+if(HFT_BUILD_BENCHMARK AND NOT CMAKE_BUILD_TYPE STREQUAL "Debug")
     set(HFT_NEED_BENCHMARK ON)
 endif()
 

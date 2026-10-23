@@ -106,11 +106,22 @@ inline constexpr size_t kFaultMessageBytes = 128;            // latch-fault mess
 // Journal recording: zero-cost no-op in Release (arguments not evaluated).
 // The no-op is a plain expression statement — NOT do{}while(0): every call
 // site would otherwise trip cppcoreguidelines-avoid-do-while in Release.
+//
+// Deliberately FIXED-ARITY, no variadic tail: __VA_OPT__ (C++20) is not
+// understood by MSVC's traditional preprocessor nor by cppcheck 2.13
+// (Ubuntu 24.04), and both must parse this header (MSVC portability probe
+// / static-analysis job) — a macro a tool cannot expand becomes a syntax
+// error that masks every other finding in the file. Two names instead:
+// HFT_JOURNAL (5 args) and HFT_JOURNAL_REASON (6 args — additionally
+// records the RejectReason of a rejected order).
 #if HFT_DEBUG_TOOLS
-#define HFT_JOURNAL(EV, ID, PX, QTY, SIDE, ...) \
-    journal_.record(JournalEvent::EV, (ID), (PX), (QTY), static_cast<uint8_t>(SIDE) __VA_OPT__(, ) __VA_ARGS__)
+#define HFT_JOURNAL(EV, ID, PX, QTY, SIDE) \
+    journal_.record(JournalEvent::EV, (ID), (PX), (QTY), static_cast<uint8_t>(SIDE))
+#define HFT_JOURNAL_REASON(EV, ID, PX, QTY, SIDE, REASON) \
+    journal_.record(JournalEvent::EV, (ID), (PX), (QTY), static_cast<uint8_t>(SIDE), (REASON))
 #else
-#define HFT_JOURNAL(EV, ID, PX, QTY, SIDE, ...) ((void)0)
+#define HFT_JOURNAL(EV, ID, PX, QTY, SIDE) ((void)0)
+#define HFT_JOURNAL_REASON(EV, ID, PX, QTY, SIDE, REASON) ((void)0)
 #endif
 
 /**
@@ -789,12 +800,12 @@ HFT_ENGINE_INLINE RejectReason OrderBook::cancel_order_impl(OrderId id) {
     HFT_JOURNAL(OrderSubmitted, id, 0, 0, Side::Buy);
 
     if (HFT_UNLIKELY(id == 0 || id > max_order_id_)) {
-        HFT_JOURNAL(OrderRejected, id, 0, 0, Side::Buy, static_cast<uint8_t>(RejectReason::OutOfBoundsOrderId));
+        HFT_JOURNAL_REASON(OrderRejected, id, 0, 0, Side::Buy, static_cast<uint8_t>(RejectReason::OutOfBoundsOrderId));
         return RejectReason::OutOfBoundsOrderId;
     }
     uint32_t* const order_map_ptr = order_map_.data();
     if (HFT_UNLIKELY(order_map_ptr[id] == INVALID_INDEX)) {
-        HFT_JOURNAL(OrderRejected, id, 0, 0, Side::Buy, static_cast<uint8_t>(RejectReason::CancelFailed));
+        HFT_JOURNAL_REASON(OrderRejected, id, 0, 0, Side::Buy, static_cast<uint8_t>(RejectReason::CancelFailed));
         return RejectReason::CancelFailed;
     }
 
@@ -876,14 +887,14 @@ template<typename TradeCallback>
     }
 
     if (quantity == 0) [[unlikely]] {
-        HFT_JOURNAL(OrderRejected, id, price, quantity, static_cast<uint8_t>(side),
+        HFT_JOURNAL_REASON(OrderRejected, id, price, quantity, static_cast<uint8_t>(side),
                     static_cast<uint8_t>(RejectReason::InvalidQuantity));
         if (filled_out) *filled_out = 0;
         return RejectReason::InvalidQuantity;
     }
 
     if (id == 0 || id > max_order_id_) [[unlikely]] {
-        HFT_JOURNAL(OrderRejected, id, price, quantity, static_cast<uint8_t>(side),
+        HFT_JOURNAL_REASON(OrderRejected, id, price, quantity, static_cast<uint8_t>(side),
                     static_cast<uint8_t>(RejectReason::OutOfBoundsOrderId));
         if (filled_out) *filled_out = 0;
         return RejectReason::OutOfBoundsOrderId;
@@ -891,7 +902,7 @@ template<typename TradeCallback>
 
     uint32_t* const order_map_ptr = order_map_.data();
     if (order_map_ptr[id] != INVALID_INDEX) [[unlikely]] {
-        HFT_JOURNAL(OrderRejected, id, price, quantity, static_cast<uint8_t>(side),
+        HFT_JOURNAL_REASON(OrderRejected, id, price, quantity, static_cast<uint8_t>(side),
                     static_cast<uint8_t>(RejectReason::DuplicateOrderId));
         if (filled_out) *filled_out = 0;
         return RejectReason::DuplicateOrderId;
@@ -904,7 +915,7 @@ template<typename TradeCallback>
 
     if (type == OrderType::Limit) {
         if (price < min_price_ || price > max_price_) {
-            HFT_JOURNAL(OrderRejected, id, price, quantity, static_cast<uint8_t>(side),
+            HFT_JOURNAL_REASON(OrderRejected, id, price, quantity, static_cast<uint8_t>(side),
                         static_cast<uint8_t>(RejectReason::OutOfBoundsPrice));
             if (filled_out) *filled_out = 0;
             return RejectReason::OutOfBoundsPrice;
@@ -917,7 +928,7 @@ template<typename TradeCallback>
     if (type == OrderType::Market) {
         const bool opposite_empty = (side == Side::Buy) ? !has_asks_ : !has_bids_;
         if (HFT_UNLIKELY(opposite_empty)) {
-            HFT_JOURNAL(OrderRejected, id, 0, quantity, static_cast<uint8_t>(side),
+            HFT_JOURNAL_REASON(OrderRejected, id, 0, quantity, static_cast<uint8_t>(side),
                         static_cast<uint8_t>(RejectReason::MarketOnEmptyBook));
             if (filled_out) *filled_out = 0;
             return RejectReason::MarketOnEmptyBook;
