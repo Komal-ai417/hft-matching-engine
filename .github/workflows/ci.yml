@@ -226,9 +226,12 @@ jobs:
           cmake --build build --config Release --target hft_tests -j
           ctest --test-dir build -C Release -V --output-on-failure --timeout 300
 
+      - name: Build hft_tests (Debug, MSVC ASan per CMakeLists)
+        run: cmake --build build --config Debug --target hft_tests -j
+
       - name: Deploy ASan + Debug-CRT DLLs next to the Debug test exe
-        # The Debug leg builds with /fsanitize=address (CMakeLists MSVC
-        # branch). Since VS 17.7 the MSVC ASan runtime is one DLL —
+        # The Debug leg above builds with /fsanitize=address (CMakeLists
+        # MSVC branch). Since VS 17.7 the MSVC ASan runtime is one DLL —
         # clang_rt.asan_dynamic-x86_64.dll — living in the toolset's
         # bin\Hostx64\x64, a directory ctest's environment does NOT have on
         # PATH (actions/runner-images#8891): the exe dies in the loader with
@@ -237,20 +240,50 @@ jobs:
         # VC\Redist\MSVC\<ver>\debug_nonredist. The Windows loader searches
         # the exe's own folder FIRST, so copying beats PATH mutation for
         # ctest-spawned processes.
+        #
+        # Round-5 fix: this step originally parsed the cache with a
+        # ':FILEPATH='-only pattern — but the Visual Studio generators
+        # record the compiler as CMAKE_CXX_COMPILER:STRING=<full cl.exe
+        # path> (CMakeDetermineCompiler.cmake writes the entry via
+        # `set(... CACHE STRING ...)`), while Ninja/Makefile generators get
+        # a ':FILEPATH' entry from find_program(). On this VS leg the old
+        # pattern therefore matched nothing and the step threw before any
+        # DLL was copied. The pattern below accepts ANY cache entry type,
+        # the toolset lookup falls back to a newest-version filesystem scan
+        # when the cache yields no usable cl.exe, and the step degrades to
+        # a ::warning:: instead of aborting the (non-blocking) probe. It
+        # also runs AFTER the Debug build and BEFORE ctest so nothing
+        # built later can disturb the deployed DLLs.
         shell: pwsh
         run: |
-          $clLine = Select-String -Path build/CMakeCache.txt -Pattern '^CMAKE_CXX_COMPILER:FILEPATH=(.+)$'
-          if (-not $clLine) { throw 'CMAKE_CXX_COMPILER not found in build/CMakeCache.txt' }
-          $toolsetBin = Split-Path $clLine.Matches[0].Groups[1].Value.Trim()
-          Write-Host "toolchain bin: $toolsetBin"
+          $clPath = $null
+          if (Test-Path build/CMakeCache.txt) {
+            $hit = Select-String -Path build/CMakeCache.txt -Pattern '^CMAKE_CXX_COMPILER(?::[A-Z]+)?=(.+)$' | Select-Object -First 1
+            if ($hit) { $clPath = $hit.Matches[0].Groups[1].Value.Trim() }
+          }
+          $toolsetBin = $null
+          if ($clPath -and (Test-Path -LiteralPath $clPath)) { $toolsetBin = Split-Path -Parent $clPath }
+          if (-not $toolsetBin) {
+            Write-Host "cl.exe not resolved from cache ('${clPath}') - scanning installed toolsets"
+            $toolsetBin = Get-ChildItem -Path 'C:/Program Files/Microsoft Visual Studio/2022/*/VC/Tools/MSVC/*/bin/Hostx64/x64/cl.exe' -ErrorAction SilentlyContinue |
+              Sort-Object { try { [version]$_.Directory.Parent.Parent.Parent.Name } catch { [version]'0.0.0.0' } } |
+              Select-Object -Last 1 -ExpandProperty DirectoryName
+          }
+          Write-Host "toolset bin: $toolsetBin"
           $dst = 'build/Debug'
           New-Item -ItemType Directory -Force -Path $dst | Out-Null
 
-          # 1) ASan runtime DLL(s) from the EXACT toolset that built the exe
-          #    (CMake recorded cl.exe's path at configure time — no
-          #    newest-version guessing).
-          Get-ChildItem -Path "$toolsetBin/clang_rt.asan*dynamic*.dll" -ErrorAction SilentlyContinue |
-            ForEach-Object { Copy-Item $_.FullName $dst -Force; Write-Host "copied $($_.Name)" }
+          # 1) ASan runtime DLL(s) from the toolset that built the exe:
+          #    the cache-recorded cl.exe directory when available (no
+          #    version guessing), the newest installed toolset otherwise.
+          $asanDlls = @()
+          if ($toolsetBin) {
+            $asanDlls = @(Get-ChildItem -Path "$toolsetBin/clang_rt.asan*dynamic*.dll" -ErrorAction SilentlyContinue)
+            $asanDlls | ForEach-Object { Copy-Item $_.FullName $dst -Force; Write-Host "copied $($_.Name)" }
+          }
+          if (-not $asanDlls) {
+            Write-Host '::warning::no clang_rt.asan*dynamic*.dll found - the Debug test exe may fail to start (0xc0000135)'
+          }
 
           # 2) Non-redistributable Debug CRT. Newest redist version dir wins
           #    per DLL name (dirs are dotted versions; guard the cast).
@@ -268,12 +301,14 @@ jobs:
           if ($ucrt) { Copy-Item $ucrt.FullName $dst -Force; Write-Host 'copied ucrtbased.dll' }
 
           Write-Host '--- deployed DLLs ---'
-          Get-ChildItem $dst -Filter *.dll | ForEach-Object { Write-Host "  $($_.Name)" }
+          $deployed = Get-ChildItem $dst -Filter *.dll
+          $deployed | ForEach-Object { Write-Host "  $($_.Name)" }
+          if (-not $deployed) {
+            Write-Host '::warning::no DLLs were deployed into build/Debug - the Debug test run may fail to start'
+          }
 
-      - name: Build + test hft_tests (Debug, MSVC ASan per CMakeLists)
-        run: |
-          cmake --build build --config Debug --target hft_tests -j
-          ctest --test-dir build -C Debug -V --output-on-failure --timeout 300
+      - name: Test hft_tests (Debug)
+        run: ctest --test-dir build -C Debug -V --output-on-failure --timeout 300
 
   # ══════════════════════════════════════════════════════════════════════
   # LAYER 2 — fuzz / randomized (needs: correctness).
