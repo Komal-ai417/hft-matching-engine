@@ -108,7 +108,7 @@ pipeline:
 | `engine-gvisorsim` | `LD_PRELOAD=mlock_gvisor_sim.so` | **self-heal**: `reverting to pageable memory` + runs to completion |
 
 `tools/mlock_gvisor_sim.c` is an `LD_PRELOAD` runtime that reproduces the
-gVisor/sandbox failure mode — `mlockall()` reports success but every future
+sandbox failure mode — `mlockall()` reports success but every future
 locked mapping fails with `ENOMEM`. Left unprobed, this kills the engine
 mid-startup (`std::bad_alloc` → terminate under `-fno-exceptions`); the
 engine probes one page right after locking and self-heals to pageable
@@ -122,7 +122,7 @@ of excluded checks (`macro-usage`, `easily-swappable-parameters`, bounds/
 vararg families) are documented architectural decisions, listed with
 rationale inside `.clang-tidy` itself. The tree is clean in BOTH compile
 shapes (Debug instrumentation and Release), and `cppcheck` runs with
-`--language=c++` — without the flag cppcheck ≤ 2.13 guesses "C" for
+`--language=c++` — without the flag some cppcheck versions guess "C" for
 plain-looking headers and dies on `namespace hft`.
 
 ## 5. CI (`.github/workflows/ci.yml`)
@@ -144,7 +144,7 @@ concurrency cancellation of superseded runs.
 | `fuzz` | Rotating-seed differential sweeps + the libFuzzer differential core (ASan+UBSan; budget 60 s per push/PR, 900 s nightly; the corpus is cached across runs so coverage compounds) + a best-effort AFL++ leg; crash artifacts are uploaded on any outcome. |
 | `sanitizers` | Build A: Debug + ASan + UBSan, leak check at exit; Build B: standalone LSan. No ASan suppression is set anywhere — the engine is exception-free, so the libc++ exception-string path that originally tripped the `alloc_dealloc_mismatch` check is never reached; the job's `ASAN_OPTIONS`/`UBSAN_OPTIONS` only *raise* strictness (`halt_on_error`, `strict_string_checks`, ...). |
 | `audit-mode` | The Audit flavor under gcc, run once (the clang × Audit cell lives in the matrix above): full suite + engine smoke under the complete instrumentation gear at `-O2`. |
-| `valgrind` | Valgrind Memcheck (no compiler runtime involved) over the RelWithDebInfo test suite + engine, plus the 4-path engine smoke matrix (default / nolock / madvise-only / gVisor sim) and the 200k-event simulation. |
+|| `valgrind` | Valgrind Memcheck (no compiler runtime involved) over the RelWithDebInfo test suite + engine, plus the 4-path engine smoke matrix (default / nolock / madvise-only / sandbox sim) and the 200k-event simulation. |
 | `performance` | Google Benchmark (5 repetitions) + the RDTSC harness, cold- vs hot-cache, `perf stat/record/annotate`, FlameGraph, Cachegrind, Callgrind, assembly/vectorization inspection, an allocation-path proof (`LD_PRELOAD` malloc counter), and a benchmark regression check against a cached baseline (95% CI; baselines are recorded on `main` only). `perf` availability is probed first: on runners where `perf_event_paranoid` blocks counters, the perf-dependent steps degrade to logged warnings instead of failing the job. |
 | `performance-lab` | Non-blocking deep-comparison lab (`continue-on-error`, gated by the `deep_perf` dispatch input): compiler / `-O` level / LTO on-off / `-march` / PGO / binary-size A/B legs. A red or timed-out lab never fails the pipeline. |
 

@@ -214,7 +214,7 @@ cat verify-results/*/summary.txt
 ```
 
 The exit code is the number of failed phases. The smoke matrix includes a
-`gVisor` simulation (`LD_PRELOAD=tools/mlock_gvisor_sim.so`) proving the
+`sandbox` simulation (`LD_PRELOAD=tools/mlock_gvisor_sim.so`) proving the
 engine **self-heals to pageable memory** when a runtime reports
 `mlockall()` success but fails locked allocations — the startup-abort class
 of bug can never ship green again.
@@ -226,7 +226,7 @@ of bug can never ship green again.
 # Memory locking is self-diagnosing: HFT_DISABLE_MLOCKALL=1 skips it,
 # HFT_MADVISE_ONLY=1 skips mlockall but keeps MADV_POPULATE_WRITE pre-touch,
 # and a locked-allocation probe self-heals to pageable memory on runtimes
-# where mlockall lies (gVisor/sandboxes) instead of aborting.
+# where mlockall lies (sandboxes) instead of aborting.
 ./build/hft_engine
 
 # Full Google Test suite via ctest:

@@ -107,13 +107,12 @@ inline constexpr size_t kFaultMessageBytes = 128;            // latch-fault mess
 // The no-op is a plain expression statement — NOT do{}while(0): every call
 // site would otherwise trip cppcoreguidelines-avoid-do-while in Release.
 //
-// Deliberately FIXED-ARITY, no variadic tail: __VA_OPT__ (C++20) is not
-// understood by MSVC's traditional preprocessor nor by cppcheck 2.13
-// (Ubuntu 24.04), and both must parse this header (MSVC portability probe
-// / static-analysis job) — a macro a tool cannot expand becomes a syntax
-// error that masks every other finding in the file. Two names instead:
-// HFT_JOURNAL (5 args) and HFT_JOURNAL_REASON (6 args — additionally
-// records the RejectReason of a rejected order).
+// Deliberately FIXED-ARITY, no variadic tail: variadic macros with
+// __VA_OPT__ (C++20) are not understood by some preprocessors and static
+// analysis tools, and both must parse this header — a macro a tool cannot
+// expand becomes a syntax error that masks every other finding in the file.
+// Two names instead: HFT_JOURNAL (5 args) and HFT_JOURNAL_REASON (6 args —
+// additionally records the RejectReason of a rejected order).
 #if HFT_DEBUG_TOOLS
 #define HFT_JOURNAL(EV, ID, PX, QTY, SIDE) \
     journal_.record(JournalEvent::EV, (ID), (PX), (QTY), static_cast<uint8_t>(SIDE))

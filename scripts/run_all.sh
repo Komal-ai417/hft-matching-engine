@@ -274,7 +274,7 @@ else
     fi
 fi
 
-# ── Phase: smoke (4 engine paths incl. the gVisor self-heal) ────────────────
+# ── Phase: smoke (4 engine paths incl. the sandbox self-heal) ────────────────
 if phase_done smoke; then
     resume_from smoke
 else

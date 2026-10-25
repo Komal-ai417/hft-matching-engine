@@ -2,12 +2,12 @@
  * SPDX-License-Identifier: MIT
  * Copyright (c) 2026 Karyampudi Komal
  *
- * mlock_gvisor_sim.c — LD_PRELOAD runtime that simulates gVisor-style
+ * mlock_gvisor_sim.c — LD_PRELOAD runtime that simulates sandbox-style
  * locked-memory behavior for the hft_engine smoke matrix.
  *
  * WHAT IT SIMULATES
  * -----------------
- * On certain runtimes (gVisor/sandbox containers) mlockall() reports success
+ * On certain runtimes (sandbox containers) mlockall() reports success
  * but every subsequent "locked" allocation — a fresh anonymous mapping under
  * MCL_FUTURE — fails with ENOMEM. That kills the engine mid-startup: the
  * order-pool reservation fails inside std::vector's allocator, surfaces as
@@ -19,7 +19,7 @@
  *   mlockall()   -> best-effort real MCL_CURRENT, then LIE about success
  *                   and record that "MCL_FUTURE is active".
  *   mmap()       -> while "MCL_FUTURE is active", fail writable anonymous
- *                   private mappings with ENOMEM (the gVisor failure mode).
+ *                   private mappings with ENOMEM (the sandbox failure mode).
  *   mlock()      -> while "MCL_FUTURE is active", fail with EPERM
  *                   (belt for the probe's individual-lock branch).
  *   munlockall() -> clear the flag (this is the engine's self-heal trigger)
@@ -33,7 +33,7 @@
  *   cc -shared -fPIC -O2 -o mlock_gvisor_sim.so tools/mlock_gvisor_sim.c -ldl
  *
  * RUN (expected engine behavior: exit 0, warning, pageable recap)
- * ----------------------------------------------------------------
+ * ---------------------------------------------------------------
  *   LD_PRELOAD=./mlock_gvisor_sim.so ./hft_engine
  *   [hft] mlockall succeeded but locked allocations fail on this runtime
  *   (container/sandbox?) — reverting to pageable memory
@@ -67,7 +67,7 @@ int mlockall(int flags) {
         (void)real(flags & ~MCL_FUTURE);
     }
     g_future_locked = (flags & MCL_FUTURE) ? 1 : 0;
-    return 0; /* gVisor-style lie */
+    return 0; /* sandbox-style lie */
 }
 
 int munlockall(void) {
@@ -91,7 +91,7 @@ int mlock(const void* addr, size_t len) {
 void* mmap(void* addr, size_t length, int prot, int flags, int fd, long offset) {
     if (g_future_locked && (prot & PROT_WRITE) != 0
         && (flags & MAP_PRIVATE) != 0 && (flags & MAP_ANONYMOUS) != 0) {
-        errno = ENOMEM; /* the gVisor locked-allocation failure mode */
+        errno = ENOMEM; /* the sandbox locked-allocation failure mode */
         return MAP_FAILED;
     }
     const mmap_fn real = (mmap_fn)dlsym(RTLD_NEXT, "mmap");

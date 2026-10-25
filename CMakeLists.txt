@@ -136,7 +136,7 @@ endif()
 # LTO / IPO — Release-like flavors only (a directory-wide setting would also
 # LTO the sanitizer Debug build, slowing it for no benefit).
 #
-# Two silent-failure traps fixed here (both proven on cmake 3.28):
+# Two silent-failure traps addressed here (both observed on cmake 3.28):
 #
 #   1. check_ipo_supported() without LANGUAGES checks every language in the
 #      global ENABLED_LANGUAGES list — and by this point FetchContent

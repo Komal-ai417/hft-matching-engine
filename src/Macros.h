@@ -11,10 +11,10 @@
 // HFT Compiler Macros & Built-ins
 // ============================================================================
 //
-// Build flavors (see CMakeLists.txt and docs/5_Test_Infrastructure.md):
-//   Debug   : NDEBUG undefined            -> HFT_DEBUG_TOOLS active + sanitizers
-//   Audit   : -O2 + HFT_AUDIT_MODE        -> HFT_DEBUG_TOOLS active, optimized
-//   Release : -O3 + NDEBUG                -> all instrumentation compiled out
+// Build flavors:
+//   Debug   : NDEBUG undefined         -> HFT_DEBUG_TOOLS active + sanitizers
+//   Audit   : -O2 + HFT_AUDIT_MODE     -> HFT_DEBUG_TOOLS active, optimized
+//   Release : -O3 + NDEBUG             -> all instrumentation compiled out
 //
 // HFT_DEBUG_TOOLS governs every debugging aid in the library:
 // canaries, slot state stamps, allocation tracking, the event journal,

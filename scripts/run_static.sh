@@ -4,9 +4,9 @@
 # Degrades gracefully when a tool is missing. Checks:
 #   1. header self-containment (every header must compile alone)
 #   2. zero-warning build (-Wall -Wextra -Wpedantic, Release + Debug shapes)
-#   3. cppcheck (--language=c++ — without the flag cppcheck 2.13
-#      guesses "C" for plain-looking headers such as Macros.h/Order.h and
-#      dies with "Code 'namespacehft{' is invalid C code" [syntaxError])
+#   3. cppcheck (--language=c++ — without the flag some cppcheck versions
+#      guess "C" for plain-looking headers such as Macros.h/Order.h and
+#      die with "Code 'namespacehft{' is invalid C code" [syntaxError])
 #   4. clang-tidy (strict gate: WarningsAsErrors comes from .clang-tidy;
 #      run in BOTH the debug and the release shape — the HFT_JOURNAL macro
 #      and the latches compile to different code in each)

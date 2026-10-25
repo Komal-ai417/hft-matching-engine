@@ -13,7 +13,7 @@
 //                                pre-touch path on hosts that support it).
 //  3. Otherwise: raise RLIMIT_MEMLOCK (best effort; a warning is non-fatal),
 //     mlockall(MCL_CURRENT|MCL_FUTURE), then PROBE one fresh anonymous page.
-//     Some runtimes (gVisor, certain sandboxes/containers) report mlockall
+//     Some runtimes (certain sandboxes/containers) report mlockall
 //     success but fail every future locked mapping with ENOMEM — which would
 //     abort the engine mid-startup (bad_alloc -> terminate under
 //     -fno-exceptions). The probe detects the condition up front; the engine
@@ -71,7 +71,7 @@ constexpr hft::Quantity kDemoQty = 10;          // every demo order's size
 enum class LockMode : std::uint8_t { Locked, Disabled, MadviseOnly, Pageable, Reverted };
 
 /// One fresh anonymous page: under MCL_FUTURE, a runtime whose locked
-/// allocations fail (gVisor-style) rejects the mapping with ENOMEM. On a
+/// allocations fail (sandbox-style) rejects the mapping with ENOMEM. On a
 /// healthy host the page maps, locks, takes a write and releases cleanly.
 bool locked_alloc_probe_ok() noexcept {
 #if defined(__linux__)
@@ -118,7 +118,7 @@ LockMode prepare_memory_locking() noexcept {
     }
 
     if (!locked_alloc_probe_ok()) {
-        // gVisor-style runtime: mlockall "succeeded" but locked allocations
+        // sandbox-style runtime: mlockall "succeeded" but locked allocations
         // fail. Self-heal: drop MCL_FUTURE before the pools reserve their
         // storage, then continue pageable — otherwise the pool reservation
         // fails with bad_alloc -> std::terminate under -fno-exceptions.

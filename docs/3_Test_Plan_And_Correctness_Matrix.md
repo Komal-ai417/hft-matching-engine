@@ -60,7 +60,7 @@ inside the LLVM libc++ layer), not in the engine.
   `cancel_order_impl` used to journal the order's `side` *after* the pool
   slot was deallocated and poisoned, so Debug/Audit journal records showed
   `side = 0xDD` for every cancel — a use-after-free read that falsified
-  the audit trail. The fix snapshots the side before the slot is freed;
+  the audit trail. The implementation snapshots the side before the slot is freed;
   this test replays cancel traffic and asserts every journal record carries
   the order's true side.
 
